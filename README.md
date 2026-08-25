@@ -165,6 +165,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_volume - manage volumes on the FlashArray
 - purefa_volume_tags - manage volume tags on the FlashArray
 - purefa_workload - manage Fusion workloads in a Fleet
+- purefa_zte - perform Zero Touch Erasure (ZTE) factory reset on the FlashArray
 
 ## License Information
 

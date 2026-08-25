@@ -91,6 +91,7 @@ from plugins.modules.purefa_policy import (
     rename_policy,
     create_policy,
     update_policy,
+    main,
 )
 
 
@@ -4142,6 +4143,78 @@ class TestUpdatePasswordPolicyBugFixes:
         assert call_kwargs["min_character_groups"] == 2
         mock_module.exit_json.assert_called_once_with(changed=True)
 
+    @patch("plugins.modules.purefa_policy.check_response")
+    @patch("plugins.modules.purefa_policy.patch_with_context")
+    @patch("plugins.modules.purefa_policy.get_with_context")
+    @patch("plugins.modules.purefa_policy.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_policy.PolicyPassword")
+    def test_update_password_policy_null_fields(
+        self, mock_pwd, mock_lv, mock_get, mock_patch, mock_check
+    ):
+        """Null password-policy fields must not raise AttributeError (issue #1030).
+
+        A management policy can return null for fields such as lockout_duration.
+        The pydantic models in newer py-pure-client raise AttributeError on
+        direct access to an unset field, so the module must use getattr and
+        treat null as "not configured".
+        """
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "management",
+            "policy": "password",
+            "enabled": True,
+            "enforce_dictionary_check": True,
+            "enforce_username_check": True,
+            "min_character_groups": 4,
+            "min_characters_per_group": 1,
+            "min_password_length": 14,
+            "min_password_age": None,
+            "max_password_age": None,
+            "max_login_attempts": 5,
+            "lockout_duration": 900,
+            "password_history": 24,
+            "directory": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+
+        # spec omits the six nullable fields, so direct attribute access on
+        # them raises AttributeError - mirroring the pydantic SDK returning
+        # null - and getattr(..., None) is the only safe way to read them.
+        mock_policy = Mock(
+            spec=[
+                "enabled",
+                "min_password_age",
+                "max_password_age",
+                "max_login_attempts",
+                "password_history",
+            ]
+        )
+        mock_policy.enabled = True
+        mock_policy.min_password_age = 0
+        mock_policy.max_password_age = 0
+        mock_policy.max_login_attempts = 5
+        mock_policy.password_history = 0
+
+        mock_get.return_value = Mock(status_code=200, items=[mock_policy])
+        mock_patch.return_value = Mock(status_code=200)
+
+        update_policy(mock_module, mock_array, "2.38", False)
+
+        mock_pwd.assert_called_once()
+        call_kwargs = mock_pwd.call_args[1]
+        # Requested values are applied over the null (unconfigured) current ones
+        assert call_kwargs["lockout_duration"] == 900000
+        assert call_kwargs["min_password_length"] == 14
+        assert call_kwargs["min_character_groups"] == 4
+        assert call_kwargs["min_characters_per_group"] == 1
+        assert call_kwargs["enforce_dictionary_check"] is True
+        assert call_kwargs["enforce_username_check"] is True
+        assert call_kwargs["password_history"] == 24
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
     @patch("plugins.modules.purefa_policy.get_with_context")
     @patch("plugins.modules.purefa_policy.LooseVersion", side_effect=LooseVersion)
     def test_no_change_when_all_params_none(self, mock_lv, mock_get):
@@ -4305,3 +4378,37 @@ class TestUpdateQuotaPolicyBugFixes:
         # Should create a new rule with 'none' notification
         mock_post.assert_called()
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestPasswordPolicyVersionGates:
+    """Version gating for password-policy parameters (issue #1030 / PR #1031)"""
+
+    @patch("plugins.modules.purefa_policy.HAS_PURESTORAGE", True)
+    @patch("plugins.modules.purefa_policy.get_array")
+    @patch("plugins.modules.purefa_policy.AnsibleModule")
+    @patch("plugins.modules.purefa_policy.LooseVersion", side_effect=LooseVersion)
+    def test_max_password_age_requires_2_39(self, mock_lv, mock_am, mock_get_array):
+        """max_password_age on a pre-2.39 array fails with a clear version error"""
+        mock_module = Mock()
+        mock_module.params = {
+            "policy": "password",
+            "max_password_age": "90d",
+            "min_password_age": None,
+            "lockout_duration": None,
+            "state": "present",
+            "quota_notifications": None,
+        }
+        mock_module.fail_json.side_effect = SystemExit
+        mock_am.return_value = mock_module
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_get_array.return_value = mock_array
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        msgs = [c.kwargs.get("msg", "") for c in mock_module.fail_json.call_args_list]
+        assert any("max_password_age" in m and "2.39" in m for m in msgs)

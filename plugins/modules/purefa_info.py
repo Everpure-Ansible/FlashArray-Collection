@@ -1953,9 +1953,14 @@ def generate_host_dict(array, performance):
         host_info[hostname]["logged_in_ports"] = logged_in
         host_connections = list(array.get_connections(host_names=[hostname]).items)
         for connection in host_connections:
+            # LOCAL WORKAROUND - DO NOT COMMIT, see generate_workload_dict.
+            # connection.host_group and connection.volume are both optional, so
+            # reading through them unguarded raises rather than returning None.
             connection_dict = {
-                "hostgroup": getattr(connection.host_group, "name", None),
-                "volume": connection.volume.name,
+                "hostgroup": getattr(
+                    getattr(connection, "host_group", None), "name", None
+                ),
+                "volume": getattr(getattr(connection, "volume", None), "name", None),
                 "lun": getattr(connection, "lun", None),
                 "nsid": getattr(connection, "nsid", None),
             }
@@ -3181,20 +3186,26 @@ def generate_preset_dict(array):
 
 
 def generate_workload_dict(array):
+    # LOCAL WORKAROUND - DO NOT COMMIT. Tracked separately in
+    # lab/bug-purefa_info-workload-status-details.md; applied only so the
+    # purefa_workload verification playbook can run past its purefa_info
+    # read-backs. Revert with: git checkout plugins/modules/purefa_info.py
     workload_info = {}
     workloads = list(array.get_workloads().items)
     if workloads:
         for workload in workloads:
+            created = getattr(workload, "created", None)
             workload_info[workload.name] = {
                 "description": getattr(workload, "description", None),
-                "context": workload.context.name,
-                "destroyed": workload.destroyed,
-                "preset": workload.preset.name,
-                "status": workload.status,
-                "status_details": workload.status_details,
-                "created": time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.gmtime(workload.created / 1000),
+                "context": getattr(getattr(workload, "context", None), "name", None),
+                "destroyed": getattr(workload, "destroyed", False),
+                "preset": getattr(getattr(workload, "preset", None), "name", None),
+                "status": getattr(workload, "status", None),
+                "status_details": getattr(workload, "status_details", []),
+                "created": (
+                    time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(created / 1000))
+                    if created
+                    else None
                 ),
                 "time_remaining": getattr(workload, "time_remaining", None),
             }

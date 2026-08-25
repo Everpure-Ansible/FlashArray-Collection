@@ -71,6 +71,7 @@ action_groups:
    - purefa_volume
    - purefa_volume_tags
    - purefa_workload
+   - purefa_zte
 plugin_routing:
   modules:
     purefa_sso:

@@ -260,6 +260,7 @@ options:
     - Supported time units are C(w) (weeks), C(d) (days), C(h) (hours), C(m) (minutes), C(s) (seconds).
     - Range between 1 day and 99999 days.
     - A value of 0 or C(0s) disables password expiration.
+    - Requires FlashArray REST API 2.39 or later.
     type: str
     version_added: 1.33.0
   rule_name:
@@ -526,6 +527,7 @@ SECURITY_VERSION = "2.29"
 ABE_VERSION = "2.4"
 PASSWORD_VERSION = "2.34"
 CONTEXT_VERSION = "2.38"
+MAX_PASSWORD_AGE_VERSION = "2.39"
 CA_VERSION = "2.43"
 
 
@@ -2002,12 +2004,24 @@ def update_policy(module, array, api_version, all_squash):
         )
         pwd_policy = list(res.items)[0]
         current_pwd_policy = {
-            "enforce_dictionary_check": pwd_policy.enforce_dictionary_check,
-            "enforce_username_check": pwd_policy.enforce_username_check,
-            "lockout_duration": pwd_policy.lockout_duration,
-            "min_character_groups": pwd_policy.min_character_groups,
-            "min_characters_per_group": pwd_policy.min_characters_per_group,
-            "min_password_length": pwd_policy.min_password_length,
+            # These fields can be returned as null (for example lockout_duration
+            # on a management policy that has never had it set). The pydantic
+            # models in newer py-pure-client raise AttributeError on direct
+            # access to an unset field, so use getattr and treat null as "not
+            # configured" - a None here differs from any requested value, so a
+            # supplied setting is still applied.
+            "enforce_dictionary_check": getattr(
+                pwd_policy, "enforce_dictionary_check", None
+            ),
+            "enforce_username_check": getattr(
+                pwd_policy, "enforce_username_check", None
+            ),
+            "lockout_duration": getattr(pwd_policy, "lockout_duration", None),
+            "min_character_groups": getattr(pwd_policy, "min_character_groups", None),
+            "min_characters_per_group": getattr(
+                pwd_policy, "min_characters_per_group", None
+            ),
+            "min_password_length": getattr(pwd_policy, "min_password_length", None),
             "min_password_age": getattr(pwd_policy, "min_password_age", 0),
             "max_password_age": getattr(pwd_policy, "max_password_age", 0),
             "max_login_attempts": getattr(pwd_policy, "max_login_attempts", 0),
@@ -2493,6 +2507,17 @@ def main():
         module.fail_json(
             msg="FlashArray REST version not supported for password policies. "
             "Minimum version required: {0}".format(PASSWORD_VERSION)
+        )
+    if (
+        module.params["policy"] == "password"
+        and module.params["max_password_age"]
+        and LooseVersion(MAX_PASSWORD_AGE_VERSION) > LooseVersion(api_version)
+    ):
+        module.fail_json(
+            msg="FlashArray REST version not supported for max_password_age in "
+            "password policies. Minimum version required: {0}".format(
+                MAX_PASSWORD_AGE_VERSION
+            )
         )
     if (
         module.params["policy"] == "password"

@@ -1,0 +1,36 @@
+breaking_changes:
+  - purefa_workload - ``context``/``placement`` now default to the whole fleet instead of to the array receiving the request.
+  - purefa_workload - A task naming neither ``context`` nor ``placement`` now fails, naming the members involved, when two or more fleet members hold the workload name. In 1.44.0 it acted on the copy held by the array receiving the request.
+  - 'purefa_workload - ``eradicate: true`` is now refused on any state but ``absent``, and ``host`` is refused together with ``rename``. Both were previously accepted and ignored.'
+
+minor_changes:
+  - purefa_workload - Return a ``workload`` dict on every action describing the resulting fleet member, status, and volumes, instead of only ``changed``
+  - purefa_workload - Add ``wait`` and ``wait_timeout`` so a task waits for the array to finish before returning, on by default and required whenever ``host`` is set
+  - 'purefa_workload - ``context``/``placement`` now default to the whole fleet, which is also what naming the fleet itself means: "the workload with this name, wherever it is in the fleet". Only works for a create when it is used together with ``recommendation``.'
+  - purefa_workload - Refuse an explicitly empty ``context`` rather than reading it as unset, so that a value computed from an undefined variable cannot silently widen a destructive task to the whole fleet
+  - purefa_workload - Name the fleet member a context-less delete or eradicate resolved to, before anything is removed from it
+  - purefa_workload - Warn on every action, not only the destructive ones, when a workload name already exists on another fleet member, since a name is unique per member, not per fleet. A rename asks for both names, since renaming onto a name another member already holds produces two of it
+  - purefa_workload - Return the workload name and fleet member from a delete or an eradicate, in check mode and on a real run alike. An eradication leaves nothing else to read, so those two keys are all it reports
+  - module_utils/api_helpers - Add a generic ``wait_for`` polling helper, with backoff and timeout, for modules that wait on an asynchronous array operation
+
+bugfixes:
+  - purefa_workload - ``placement`` now takes effect on every action; it was previously ignored outside of a ``recommendation``-based create.
+  - purefa_workload - Warn, rather than saying nothing, when ``volume_count``, ``volume_configuration`` or ``parameters`` is set on a task that does not read it.
+  - purefa_workload - Stop ``state=expand`` from creating volumes for real while running in check mode
+  - purefa_workload - Fixed idempotency with ``recommendation``, re-running found a new placement each time and created a duplicate workload instead of recognising the one already there
+  - purefa_workload - Fixed fleet-wide idempotency for create, delete, and eradicate, which previously only checked the named member rather than the whole fleet
+  - purefa_workload - Connect or disconnect ``host`` only where needed, so naming a host already connected to some of the workload's volumes no longer fails
+  - purefa_workload - Fail with a clear message instead of a traceback or crash when a workload cannot be found, its volumes cannot be listed, or Fusion cannot find a placement
+  - purefa_workload - Fail, rather than reporting no change, when ``state=expand`` targets a workload that does not exist
+  - purefa_workload - Fail, rather than reporting no change having added nothing, when ``state=expand`` targets a destroyed workload
+  - purefa_workload - Fixed a bug which caused imposible renames to create or recover a workload
+  - 'purefa_workload - Reject ``volume_count: 0`` during an expand operation. This is a bugfix for a regression introduced in 1.0.34.'
+  - purefa_workload - ``preset`` is only read when creating or expanding a workload, so omitting it on a delete, rename, recover, or host operation no longer raises a TypeError
+  - purefa_workload - Require ``preset`` for ``state=expand``, and fail with a message naming the option, rather than reporting that preset ``None`` does not exist
+  - purefa_workload - Stop a create using ``recommendation`` from failing with an internal error when no context is named
+  - 'purefa_workload - Stop ``state=absent`` with both ``host`` and ``eradicate: true`` from eradicating a destroyed workload. Naming a host makes the task a disconnect, and the volumes went with the workload, so the task now reports no change with a warning'
+  - purefa_workload - Connect ``host`` on a re-run of a ``recommendation``-based create, which previously returned before the host was connected
+  - purefa_workload - Recover a since-destroyed workload found by a ``recommendation``-based create, instead of reporting no change
+  - purefa_workload - Refuse ``rename`` together with ``state=absent`` or ``state=expand``, rather than silently ignoring it
+  - purefa_workload - Fail on an array error during the workload lookup instead of reading any non-200 response as the workload being absent, which could let a create duplicate an existing workload
+  - purefa_workload - Restrict the fleet member list to the fleet in use, so the two halves of a fleet-wide search cannot look at different sets of arrays on an array belonging to more than one fleet
