@@ -88,7 +88,7 @@ def set_eula(module, array):
         module.fail_json(
             msg="Failed to get current EULA. Error: {0}".format(res.errors[0].message)
         )
-    if not hasattr(current_eula, "signature.accepted"):
+    if getattr(getattr(current_eula, "signature", None), "accepted", None) is None:
         changed = True
         if not module.check_mode:
             res = array.patch_arrays_eula(

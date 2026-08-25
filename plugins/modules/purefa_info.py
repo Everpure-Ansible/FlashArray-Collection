@@ -584,7 +584,7 @@ def generate_filesystems_dict(array, performance):
             d_name = directory.directory_name
             files_info[fs_name]["directories"][d_name] = {
                 "path": directory.path,
-                "data_reduction": directory.space.data_reduction,
+                "data_reduction": getattr(directory.space, "data_reduction", None),
                 "snapshots_space": getattr(directory.space, "snapshots", None),
                 "thin_provisioning": getattr(
                     directory.space, "thin_provisioning", None
@@ -683,7 +683,7 @@ def generate_pgsnaps_dict(array):
             "destroyed": snapshot.destroyed,
             "source": snapshot.source.name,
             "suffix": snapshot.suffix,
-            "snapshot_space": snapshot.space.snapshots,
+            "snapshot_space": getattr(snapshot.space, "snapshots", None),
             "used_provisioned": getattr(snapshot.space, "used_provisioned", None),
         }
         try:
@@ -714,13 +714,15 @@ def generate_dir_snaps_dict(array):
             "source": snapshot.source.name,
             "suffix": suffix,
             "client_name": snapshot.client_name,
-            "snapshot_space": snapshot.space.snapshots,
-            "total_physical_space": snapshot.space.total_physical,
-            "unique_space": snapshot.space.unique,
+            "snapshot_space": getattr(snapshot.space, "snapshots", None),
+            "total_physical_space": getattr(snapshot.space, "total_physical", None),
+            "unique_space": getattr(snapshot.space, "unique", None),
             "used_provisioned": getattr(snapshot.space, "used_provisioned", None),
         }
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            dir_snaps_info[s_name]["total_used"] = snapshot.space.total_used
+            dir_snaps_info[s_name]["total_used"] = getattr(
+                snapshot.space, "total_used", None
+            )
         if hasattr(snapshot, "policy"):
             dir_snaps_info[s_name]["policy"] = getattr(snapshot.policy, "name", None)
         if dir_snaps_info[s_name]["destroyed"] or hasattr(snapshot, "time_remaining"):
@@ -1481,7 +1483,7 @@ def generate_capacity_dict(array):
             capacity.space, "used_provisioned", 0
         )
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            capacity_info["total_used"] = capacity.space.total_used
+            capacity_info["total_used"] = getattr(capacity.space, "total_used", None)
     else:
         capacity_info["provisioned_space"] = capacity.space["total_provisioned"]
         capacity_info["free_space"] = total_capacity - capacity.space["total_physical"]
@@ -1511,7 +1513,7 @@ def generate_snap_dict(array):
     for snap in snaps:
         snapshot = snap.name
         snap_info[snapshot] = {
-            "size": snap.space.total_provisioned,
+            "size": getattr(snap.space, "total_provisioned", None),
             "source": getattr(snap.source, "name", None),
             "created_epoch": snap.created,
             "created": time.strftime(
@@ -1523,13 +1525,17 @@ def generate_snap_dict(array):
         }
         if ":" in snapshot and "::" not in snapshot:
             snap_info[snapshot]["is_local"] = False
-        snap_info[snapshot]["snapshot_space"] = snap.space.snapshots
-        snap_info[snapshot]["used_provisioned"] = (
-            getattr(snap.space, "used_provisioned", None),
+        snap_info[snapshot]["snapshot_space"] = getattr(snap.space, "snapshots", None)
+        snap_info[snapshot]["used_provisioned"] = getattr(
+            snap.space, "used_provisioned", None
         )
-        snap_info[snapshot]["total_physical"] = snap.space.total_physical
-        snap_info[snapshot]["total_provisioned"] = snap.space.total_provisioned
-        snap_info[snapshot]["unique_space"] = snap.space.unique
+        snap_info[snapshot]["total_physical"] = getattr(
+            snap.space, "total_physical", None
+        )
+        snap_info[snapshot]["total_provisioned"] = getattr(
+            snap.space, "total_provisioned", None
+        )
+        snap_info[snapshot]["unique_space"] = getattr(snap.space, "unique", None)
         if LooseVersion(SHARED_CAP_API_VERSION) <= LooseVersion(
             array.get_rest_version()
         ):
@@ -1537,7 +1543,7 @@ def generate_snap_dict(array):
                 snap.space, "snapshots_effective", None
             )
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            snap_info[snapshot]["total_used"] = snap.space.total_used
+            snap_info[snapshot]["total_used"] = getattr(snap.space, "total_used", None)
     offloads = list(array.get_offloads().items)
     for offload in offloads:
         offload_name = offload.name
@@ -1600,7 +1606,7 @@ def generate_del_snap_dict(array):
     for snap in snaps:
         snapshot = snap.name
         snap_info[snapshot] = {
-            "size": snap.space.total_provisioned,
+            "size": getattr(snap.space, "total_provisioned", None),
             "source": getattr(snap.source, "name", None),
             "created_epoch": snap.created,
             "created": time.strftime(
@@ -1611,15 +1617,19 @@ def generate_del_snap_dict(array):
             "remote": [],
             "time_remaining": getattr(snap, "time_remaining", None),
         }
-        snap_info[snapshot]["snapshot_space"] = snap.space.snapshots
-        snap_info[snapshot]["used_provisioned"] = (
-            getattr(snap.space, "used_provisioned", None),
+        snap_info[snapshot]["snapshot_space"] = getattr(snap.space, "snapshots", None)
+        snap_info[snapshot]["used_provisioned"] = getattr(
+            snap.space, "used_provisioned", None
         )
-        snap_info[snapshot]["total_physical"] = snap.space.total_physical
-        snap_info[snapshot]["total_provisioned"] = snap.space.total_provisioned
-        snap_info[snapshot]["unique_space"] = snap.space.unique
+        snap_info[snapshot]["total_physical"] = getattr(
+            snap.space, "total_physical", None
+        )
+        snap_info[snapshot]["total_provisioned"] = getattr(
+            snap.space, "total_provisioned", None
+        )
+        snap_info[snapshot]["unique_space"] = getattr(snap.space, "unique", None)
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            snap_info[snapshot]["total_used"] = snap.space.total_used
+            snap_info[snapshot]["total_used"] = getattr(snap.space, "total_used", None)
     offloads = list(array.get_offloads().items)
     for offload in offloads:
         offload_name = offload.name
@@ -1704,16 +1714,16 @@ def generate_del_vol_dict(array):
             "requested_promotion_state": vol.requested_promotion_state,
             "bandwidth": getattr(vol.qos, "bandwidth_limit", None),
             "iops_limit": getattr(vol.qos, "iops_limit", None),
-            "snapshots_space": vol.space.snapshots,
+            "snapshots_space": getattr(vol.space, "snapshots", None),
             # Provide system as this matches the old naming convention
-            "system": vol.space.unique,
-            "unique_space": vol.space.unique,
-            "virtual_space": vol.space.virtual,
-            "total_physical_space": vol.space.total_physical,
-            "data_reduction": vol.space.data_reduction,
-            "total_reduction": vol.space.total_reduction,
-            "total_provisioned": vol.space.total_provisioned,
-            "thin_provisioning": vol.space.thin_provisioning,
+            "system": getattr(vol.space, "unique", None),
+            "unique_space": getattr(vol.space, "unique", None),
+            "virtual_space": getattr(vol.space, "virtual", None),
+            "total_physical_space": getattr(vol.space, "total_physical", None),
+            "data_reduction": getattr(vol.space, "data_reduction", None),
+            "total_reduction": getattr(vol.space, "total_reduction", None),
+            "total_provisioned": getattr(vol.space, "total_provisioned", None),
+            "thin_provisioning": getattr(vol.space, "thin_provisioning", None),
             "host_encryption_key_status": vol.host_encryption_key_status,
             "subtype": vol.subtype,
         }
@@ -1733,11 +1743,14 @@ def generate_del_vol_dict(array):
             volume_info[volume]["unique_effective"] = getattr(
                 vol.space, "unique_effective", None
             )
-            volume_info[volume]["used_provisioned"] = (
-                getattr(vol.space, "used_provisioned", None),
+            volume_info[volume]["total_effective"] = getattr(
+                vol.space, "total_effective", None
+            )
+            volume_info[volume]["used_provisioned"] = getattr(
+                vol.space, "used_provisioned", None
             )
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            volume_info[volume]["total_used"] = vol.space.total_used
+            volume_info[volume]["total_used"] = getattr(vol.space, "total_used", None)
     if LooseVersion(TAGS_API_VERSION) <= LooseVersion(array.get_rest_version()):
         volume_tags = list(array.get_volumes_tags(resource_destroyed=True).items)
         for volume_tag in volume_tags:
@@ -1781,16 +1794,16 @@ def generate_vol_dict(array, performance):
             "host_groups": [],
             "bandwidth": getattr(vol.qos, "bandwidth_limit", None),
             "iops_limit": getattr(vol.qos, "iops_limit", None),
-            "snapshots_space": vol.space.snapshots,
+            "snapshots_space": getattr(vol.space, "snapshots", None),
             # Provide system as this matches the old naming convention
-            "system": vol.space.unique,
-            "unique_space": vol.space.unique,
-            "virtual_space": vol.space.virtual,
-            "total_physical_space": vol.space.total_physical,
-            "data_reduction": vol.space.data_reduction,
-            "total_reduction": vol.space.total_reduction,
-            "total_provisioned": vol.space.total_provisioned,
-            "thin_provisioning": vol.space.thin_provisioning,
+            "system": getattr(vol.space, "unique", None),
+            "unique_space": getattr(vol.space, "unique", None),
+            "virtual_space": getattr(vol.space, "virtual", None),
+            "total_physical_space": getattr(vol.space, "total_physical", None),
+            "data_reduction": getattr(vol.space, "data_reduction", None),
+            "total_reduction": getattr(vol.space, "total_reduction", None),
+            "total_provisioned": getattr(vol.space, "total_provisioned", None),
+            "thin_provisioning": getattr(vol.space, "thin_provisioning", None),
             "performance": [],
             "host_encryption_key_status": vol.host_encryption_key_status,
             "subtype": vol.subtype,
@@ -1807,11 +1820,11 @@ def generate_vol_dict(array, performance):
             volume_info[volume]["total_effective"] = getattr(
                 vol.space, "total_effective", None
             )
-            volume_info[volume]["used_provisioned"] = (
-                getattr(vol.space, "used_provisioned", None),
+            volume_info[volume]["used_provisioned"] = getattr(
+                vol.space, "used_provisioned", None
             )
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-            volume_info[volume]["total_used"] = vol.space.total_used
+            volume_info[volume]["total_used"] = getattr(vol.space, "total_used", None)
         if LooseVersion(SAFE_MODE_VERSION) <= LooseVersion(array.get_rest_version()):
             volume_info[volume]["priority"] = vol.priority
             volume_info[volume]["priority_adjustment"] = (
@@ -2316,10 +2329,10 @@ def generate_del_pods_dict(array):
             "total_reduction": getattr(pod.space, "total_reduction", None),
             "unique": getattr(pod.space, "unique", None),
             "virtual": getattr(pod.space, "virtual", None),
-            "replication": pod.space.replication,
+            "replication": getattr(pod.space, "replication", None),
             "used_provisioned": getattr(pod.space, "used_provisioned", None),
             "quota_limit": getattr(pod, "quota_limit", None),
-            "total_used": pod.space.total_used,
+            "total_used": getattr(pod.space, "total_used", None),
             "tags": [],
         }
         for preferences in pod.failover_preferences:
@@ -2383,10 +2396,10 @@ def generate_pods_dict(array, performance):
             "total_reduction": getattr(pod.space, "total_reduction", None),
             "unique": getattr(pod.space, "unique", None),
             "virtual": getattr(pod.space, "virtual", None),
-            "replication": pod.space.replication,
+            "replication": getattr(pod.space, "replication", None),
             "used_provisioned": getattr(pod.space, "used_provisioned", None),
             "quota_limit": getattr(pod, "quota_limit", None),
-            "total_used": pod.space.total_used,
+            "total_used": getattr(pod.space, "total_used", None),
             "tags": [],
             "source": getattr(pod.source, "name", None),
         }
@@ -2524,15 +2537,15 @@ def generate_vgroups_dict(array, performance):
         vgroups_info[name] = {
             "volumes": [],
             "performance": [],
-            "snapshots_space": vgroup.space.snapshots,
-            "system": vgroup.space.unique,  # Backwards compatibility
-            "unique_space": vgroup.space.unique,
-            "virtual_space": vgroup.space.virtual,
-            "data_reduction": (getattr(vgroup.space, "data_reduction", None),),
-            "total_reduction": (getattr(vgroup.space, "total_reduction", None),),
-            "total_provisioned": vgroup.space.total_provisioned,
-            "thin_provisioning": vgroup.space.thin_provisioning,
-            "used_provisioned": (getattr(vgroup.space, "used_provisioned", None),),
+            "snapshots_space": getattr(vgroup.space, "snapshots", None),
+            "system": getattr(vgroup.space, "unique", None),  # Backwards compatibility
+            "unique_space": getattr(vgroup.space, "unique", None),
+            "virtual_space": getattr(vgroup.space, "virtual", None),
+            "data_reduction": getattr(vgroup.space, "data_reduction", None),
+            "total_reduction": getattr(vgroup.space, "total_reduction", None),
+            "total_provisioned": getattr(vgroup.space, "total_provisioned", None),
+            "thin_provisioning": getattr(vgroup.space, "thin_provisioning", None),
+            "used_provisioned": getattr(vgroup.space, "used_provisioned", None),
             "bandwidth_limit": getattr(vgroup.qos, "bandwidth_limit", ""),
             "iops_limit": getattr(vgroup.qos, "iops_limit", ""),
             "total_used": getattr(vgroup.space, "total_used", None),
@@ -2600,15 +2613,15 @@ def generate_del_vgroups_dict(array):
         vgroups_info[name] = {
             "volumes": [],
             "performance": [],
-            "snapshots_space": vgroup.space.snapshots,
-            "system": vgroup.space.unique,  # Backwards compatibility
-            "unique_space": vgroup.space.unique,
-            "virtual_space": vgroup.space.virtual,
-            "data_reduction": (getattr(vgroup.space, "data_reduction", None),),
-            "total_reduction": (getattr(vgroup.space, "total_reduction", None),),
-            "total_provisioned": vgroup.space.total_provisioned,
-            "thin_provisioning": vgroup.space.thin_provisioning,
-            "used_provisioned": (getattr(vgroup.space, "used_provisioned", None),),
+            "snapshots_space": getattr(vgroup.space, "snapshots", None),
+            "system": getattr(vgroup.space, "unique", None),  # Backwards compatibility
+            "unique_space": getattr(vgroup.space, "unique", None),
+            "virtual_space": getattr(vgroup.space, "virtual", None),
+            "data_reduction": getattr(vgroup.space, "data_reduction", None),
+            "total_reduction": getattr(vgroup.space, "total_reduction", None),
+            "total_provisioned": getattr(vgroup.space, "total_provisioned", None),
+            "thin_provisioning": getattr(vgroup.space, "thin_provisioning", None),
+            "used_provisioned": getattr(vgroup.space, "used_provisioned", None),
             "bandwidth_limit": getattr(vgroup.qos, "bandwidth_limit", ""),
             "iops_limit": getattr(vgroup.qos, "iops_limit", ""),
             "total_used": getattr(vgroup.space, "total_used", None),
@@ -2805,8 +2818,6 @@ def generate_google_offload_dict(array):
                 "used_provisioned": getattr(offload.space, "used_provisioned", None),
                 "total_used": getattr(offload.space, "total_used", None),
             }
-            if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
-                offload_info[name]["total_used"] = offload.space.total_used
     return offload_info
 
 

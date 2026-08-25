@@ -91,6 +91,61 @@ class TestSetEula:
         mock_array.patch_arrays_eula.assert_not_called()
         mock_module.exit_json.assert_called_once_with(changed=True)
 
+    def test_set_eula_already_signed(self):
+        """Test that an already-signed EULA is not signed again"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "company": "ACME Storage, Inc.",
+            "name": "Fred Bloggs",
+            "title": "Storage Manager",
+        }
+
+        mock_array = Mock()
+        mock_signature = Mock(spec=["accepted"])
+        mock_signature.accepted = 1687000000000  # ms since epoch
+        mock_current_eula = Mock(spec=["signature"])
+        mock_current_eula.signature = mock_signature
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.items = [mock_current_eula]
+        mock_array.get_arrays_eula.return_value = mock_response
+
+        set_eula(mock_module, mock_array)
+
+        mock_array.patch_arrays_eula.assert_not_called()
+        mock_module.warn.assert_called_once_with("EULA already signed")
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    def test_set_eula_signature_present_but_unaccepted(self):
+        """Test signing when a signature object exists but accepted is null"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "company": "ACME Storage, Inc.",
+            "name": "Fred Bloggs",
+            "title": "Storage Manager",
+        }
+
+        mock_array = Mock()
+        mock_signature = Mock(spec=["accepted"])
+        mock_signature.accepted = None
+        mock_current_eula = Mock(spec=["signature"])
+        mock_current_eula.signature = mock_signature
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.items = [mock_current_eula]
+        mock_array.get_arrays_eula.return_value = mock_response
+
+        mock_patch_response = Mock()
+        mock_patch_response.status_code = 200
+        mock_array.patch_arrays_eula.return_value = mock_patch_response
+
+        set_eula(mock_module, mock_array)
+
+        mock_array.patch_arrays_eula.assert_called_once()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
     def test_get_eula_failure(self):
         """Test when getting EULA fails"""
         mock_module = Mock()

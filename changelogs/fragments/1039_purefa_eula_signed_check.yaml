@@ -1,0 +1,2 @@
+bugfixes:
+  - purefa_eula - Fixed the already-signed check, which used ``hasattr(current_eula, "signature.accepted")``. ``hasattr`` does not traverse attributes, so the test was always false and the EULA was re-signed on every run, always reporting ``changed``. It now checks ``signature.accepted``, which the array returns as ``null`` until the EULA is accepted
