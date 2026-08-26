@@ -54,6 +54,40 @@ from plugins.modules.purefa_smtp import (
 )
 
 
+class FakeSmtpServer:
+    """Stand-in for the SDK's SmtpServer model.
+
+    py-pure-client models raise AttributeError for any field the array
+    returned as null instead of returning None. Mock objects always return
+    whatever they were given, which is why issue #1040 was invisible to the
+    original unit tests - use this for anything that depends on how unset
+    settings are read.
+    """
+
+    def __init__(self, **fields):
+        self._fields = fields
+
+    def __getattr__(self, name):
+        value = self._fields.get(name)
+        if value is None:
+            raise AttributeError(name)
+        return value
+
+
+def configured_smtp():
+    """A FakeSmtpServer with only relay_host and sender_domain configured"""
+    return FakeSmtpServer(
+        name="smtp",
+        sender_domain="test.com",
+        relay_host="relay.test.com",
+        encryption_mode="starttls",
+        user_name=None,
+        sender_username=None,
+        subject_prefix=None,
+        body_prefix=None,
+    )
+
+
 class TestDeleteSmtp:
     """Tests for delete_smtp function"""
 
@@ -62,11 +96,35 @@ class TestDeleteSmtp:
         mock_module = Mock()
         mock_module.check_mode = True
         mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
 
         delete_smtp(mock_module, mock_array)
 
         mock_module.exit_json.assert_called_once_with(changed=True)
         mock_array.patch_smtp_servers.assert_not_called()
+
+    def test_delete_smtp_already_cleared(self):
+        """Test delete_smtp is idempotent when SMTP is already cleared"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [
+            FakeSmtpServer(
+                name="smtp",
+                sender_domain="None",
+                relay_host=None,
+                encryption_mode=None,
+                user_name=None,
+                sender_username=None,
+                subject_prefix=None,
+                body_prefix=None,
+            )
+        ]
+
+        delete_smtp(mock_module, mock_array)
+
+        mock_array.patch_smtp_servers.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
 
 
 class TestCreateSmtp:
@@ -245,6 +303,7 @@ class TestDeleteSmtpSuccess:
         mock_module = Mock()
         mock_module.check_mode = False
         mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
         mock_array.patch_smtp_servers.return_value = Mock(status_code=200)
 
         delete_smtp(mock_module, mock_array)
@@ -412,3 +471,137 @@ class TestCreateSmtpSuccess:
 
         mock_array.patch_smtp_servers.assert_not_called()
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestCreateSmtpIdempotency:
+    """Regression tests for issue #1040 - purefa_smtp always reports changed"""
+
+    def test_create_smtp_no_change_with_unset_settings(self):
+        """Settings the array leaves unset must not count as a change"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "sender_domain": "test.com",
+            "relay_host": "relay.test.com",
+            "user": None,
+            "password": None,
+            "encryption_mode": "starttls",
+            "sender": None,
+            "subject_prefix": None,
+            "body_prefix": None,
+        }
+        mock_array = Mock()
+        # user_name, sender_username, subject_prefix and body_prefix were never
+        # configured, so the array returns them as null
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
+
+        create_smtp(mock_module, mock_array)
+
+        mock_array.patch_smtp_servers.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    def test_create_smtp_no_change_in_check_mode(self):
+        """The same play in check mode must also report no change"""
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = {
+            "sender_domain": "test.com",
+            "relay_host": "relay.test.com",
+            "user": None,
+            "password": None,
+            "encryption_mode": "starttls",
+            "sender": None,
+            "subject_prefix": None,
+            "body_prefix": None,
+        }
+        mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
+
+        create_smtp(mock_module, mock_array)
+
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_smtp.check_response")
+    def test_create_smtp_change_detected_with_unset_settings(self, mock_check_response):
+        """A real change is still detected when other settings are unset"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "sender_domain": "test.com",
+            "relay_host": "new-relay.test.com",
+            "user": None,
+            "password": None,
+            "encryption_mode": "starttls",
+            "sender": None,
+            "subject_prefix": None,
+            "body_prefix": None,
+        }
+        mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
+        mock_array.patch_smtp_servers.return_value = Mock(status_code=200)
+
+        create_smtp(mock_module, mock_array)
+
+        mock_array.patch_smtp_servers.assert_called_once()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_smtp.SmtpServer")
+    @patch("plugins.modules.purefa_smtp.check_response")
+    def test_create_smtp_clear_encryption_mode(
+        self, mock_check_response, mock_smtp_server
+    ):
+        """An empty encryption_mode clears the setting, as documented"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "sender_domain": None,
+            "relay_host": None,
+            "user": None,
+            "password": None,
+            "encryption_mode": "",
+            "sender": None,
+            "subject_prefix": None,
+            "body_prefix": None,
+        }
+        mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [configured_smtp()]
+        mock_array.patch_smtp_servers.return_value = Mock(status_code=200)
+
+        create_smtp(mock_module, mock_array)
+
+        mock_array.patch_smtp_servers.assert_called_once()
+        assert mock_smtp_server.call_args.kwargs["encryption_mode"] == ""
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    def test_create_smtp_cleared_encryption_mode_is_idempotent(self):
+        """Re-running with an empty encryption_mode reports no change"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "sender_domain": None,
+            "relay_host": None,
+            "user": None,
+            "password": None,
+            "encryption_mode": "",
+            "sender": None,
+            "subject_prefix": None,
+            "body_prefix": None,
+        }
+        mock_array = Mock()
+        mock_array.get_smtp_servers.return_value.items = [
+            FakeSmtpServer(
+                name="smtp",
+                sender_domain="test.com",
+                relay_host="relay.test.com",
+                encryption_mode=None,
+                user_name=None,
+                sender_username=None,
+                subject_prefix=None,
+                body_prefix=None,
+            )
+        ]
+
+        create_smtp(mock_module, mock_array)
+
+        mock_array.patch_smtp_servers.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
