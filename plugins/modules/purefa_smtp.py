@@ -117,21 +117,57 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
     check_response,
 )
 
+SMTP_FIELDS = (
+    "sender_domain",
+    "relay_host",
+    "user_name",
+    "encryption_mode",
+    "sender_username",
+    "subject_prefix",
+    "body_prefix",
+)
+
+# The settings written by ``state: absent``, and therefore the state in which
+# there is nothing left to delete.
+CLEARED_SMTP = {
+    "sender_domain": "None",
+    "relay_host": "",
+    "user_name": "",
+    "encryption_mode": "",
+    "sender_username": "",
+    "subject_prefix": "",
+    "body_prefix": "",
+}
+
+
+def _get_current_smtp(array):
+    """Return the current SMTP settings as a dict of strings.
+
+    Any setting the array has not configured is reported as an empty string.
+    The SDK models raise AttributeError for null fields, so every read needs
+    a default, and that default has to be the same one used when building the
+    desired settings - otherwise unset fields compare as None against "" and
+    the module reports a change on every run.
+    """
+    # Currently only 1 SMTP server is configurable
+    current_smtp = list(array.get_smtp_servers().items)[0]
+    return {field: getattr(current_smtp, field, "") or "" for field in SMTP_FIELDS}
+
 
 def delete_smtp(module, array):
     """Delete SMTP settings"""
-    changed = True
-    if not module.check_mode:
+    changed = _get_current_smtp(array) != CLEARED_SMTP
+    if changed and not module.check_mode:
         res = array.patch_smtp_servers(
             smtp=SmtpServer(
-                sender_domain="None",
-                user_name="",
+                sender_domain=CLEARED_SMTP["sender_domain"],
+                user_name=CLEARED_SMTP["user_name"],
                 password="",
-                relay_host="",
-                encryption_mode="",
-                sender_username="",
-                subject_prefix="",
-                body_prefix="",
+                relay_host=CLEARED_SMTP["relay_host"],
+                encryption_mode=CLEARED_SMTP["encryption_mode"],
+                sender_username=CLEARED_SMTP["sender_username"],
+                subject_prefix=CLEARED_SMTP["subject_prefix"],
+                body_prefix=CLEARED_SMTP["body_prefix"],
             )
         )
         check_response(res, module, "Delete SMTP settings failed")
@@ -141,86 +177,41 @@ def delete_smtp(module, array):
 def create_smtp(module, array):
     """Set SMTP settings"""
     changed = False
-    # Currently only 1 SMTP server is configurable
-    current_smtp = list(array.get_smtp_servers().items)[0]
-    current_server = {
-        "sender_domain": getattr(current_smtp, "sender_domain", None),
-        "relay_host": getattr(current_smtp, "relay_host", None),
-        "user_name": getattr(current_smtp, "user_name", None),
-        "encryption_mode": getattr(current_smtp, "encryption_mode", None),
-        "sender_username": getattr(current_smtp, "sender_username", None),
-        "subject_prefix": getattr(current_smtp, "subject_prefix", None),
-        "body_prefix": getattr(current_smtp, "body_prefix", None),
-    }
-    new_server = {
-        "sender_domain": getattr(current_smtp, "sender_domain", ""),
-        "relay_host": getattr(current_smtp, "relay_host", ""),
-        "user_name": getattr(current_smtp, "user_name", ""),
-        "encryption_mode": getattr(current_smtp, "encryption_mode", ""),
-        "sender_username": getattr(current_smtp, "sender_username", ""),
-        "subject_prefix": getattr(current_smtp, "subject_prefix", ""),
-        "body_prefix": getattr(current_smtp, "body_prefix", ""),
-    }
+    current_server = _get_current_smtp(array)
+    new_server = dict(current_server)
 
-    if (
-        module.params["sender_domain"]
-        and current_server["sender_domain"] != module.params["sender_domain"]
-    ):
+    if module.params["sender_domain"]:
         new_server["sender_domain"] = module.params["sender_domain"]
-    if (
-        module.params["relay_host"]
-        and current_server["relay_host"] != module.params["relay_host"]
-    ):
+    if module.params["relay_host"]:
         new_server["relay_host"] = module.params["relay_host"]
-    if module.params["user"] and current_server["user_name"] != module.params["user"]:
+    if module.params["user"]:
         new_server["user_name"] = module.params["user"]
-    if (
-        module.params["sender"]
-        and current_server["sender_username"] != module.params["sender"]
-    ):
+    if module.params["sender"]:
         new_server["sender_username"] = module.params["sender"]
-    if (
-        module.params["body_prefix"]
-        and current_server["body_prefix"] != module.params["body_prefix"]
-    ):
+    if module.params["body_prefix"]:
         new_server["body_prefix"] = module.params["body_prefix"]
-    if (
-        module.params["subject_prefix"]
-        and current_server["subject_prefix"] != module.params["subject_prefix"]
-    ):
+    if module.params["subject_prefix"]:
         new_server["subject_prefix"] = module.params["subject_prefix"]
-    if (
-        module.params["encryption_mode"]
-        and current_server["encryption_mode"] != module.params["encryption_mode"]
-    ):
+    # An empty string is a valid encryption_mode - it clears the setting - so
+    # this parameter is checked against None rather than for truthiness.
+    if module.params["encryption_mode"] is not None:
         new_server["encryption_mode"] = module.params["encryption_mode"]
+
     if new_server != current_server or module.params["password"]:
         changed = True
         if not module.check_mode:
+            smtp_settings = {
+                "sender_domain": new_server["sender_domain"],
+                "relay_host": new_server["relay_host"],
+                "encryption_mode": new_server["encryption_mode"],
+                "sender_username": new_server["sender_username"],
+                "subject_prefix": new_server["subject_prefix"],
+                "body_prefix": new_server["body_prefix"],
+            }
             if module.params["password"]:
-                res = array.patch_smtp_servers(
-                    smtp=SmtpServer(
-                        sender_domain=new_server["sender_domain"],
-                        user_name=module.params["user"],
-                        password=module.params["password"],
-                        relay_host=new_server["relay_host"],
-                        encryption_mode=new_server["encryption_mode"],
-                        sender_username=new_server["sender_username"],
-                        subject_prefix=new_server["subject_prefix"],
-                        body_prefix=new_server["body_prefix"],
-                    )
-                )
-            else:
-                res = array.patch_smtp_servers(
-                    smtp=SmtpServer(
-                        sender_domain=new_server["sender_domain"],
-                        relay_host=new_server["relay_host"],
-                        encryption_mode=new_server["encryption_mode"],
-                        sender_username=new_server["sender_username"],
-                        subject_prefix=new_server["subject_prefix"],
-                        body_prefix=new_server["body_prefix"],
-                    )
-                )
+                smtp_settings["user_name"] = module.params["user"]
+                smtp_settings["password"] = module.params["password"]
+            res = array.patch_smtp_servers(smtp=SmtpServer(**smtp_settings))
             check_response(res, module, "Failed to change SMTP server details")
     module.exit_json(changed=changed)
 
