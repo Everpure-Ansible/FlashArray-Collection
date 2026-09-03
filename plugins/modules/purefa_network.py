@@ -222,10 +222,10 @@ def update_fc_interface(module, array, interface):
 
 def _check_subinterfaces(module, array):
     subordinates = []
-    subinterfaces = list(
-        array.get_network_interfaces(names=[module.params["name"]]).items
-    )[0].eth.subinterfaces
-    for subinterface in subinterfaces:
+    interfaces = list(array.get_network_interfaces(names=[module.params["name"]]).items)
+    # An interface with no children reports subinterfaces as null, and the SDK
+    # models raise AttributeError for any field the array returned as null
+    for subinterface in getattr(interfaces[0].eth, "subinterfaces", None) or []:
         # subinterfaces are FixedReferenceNoId objects; store the name so the
         # result is a list of sortable/comparable strings
         subordinates.append(subinterface.name)
@@ -346,7 +346,9 @@ def update_interface(module, array):
         "netmask": getattr(interface.eth, "netmask", None),
         "services": sorted(interface.services),
         # subinterfaces are FixedReferenceNoId objects - sort by name, not object
-        "subinterfaces": sorted(sub.name for sub in interface.eth.subinterfaces),
+        "subinterfaces": sorted(
+            sub.name for sub in (getattr(interface.eth, "subinterfaces", None) or [])
+        ),
     }
     new_state = current_state.copy()
 
@@ -380,7 +382,10 @@ def update_interface(module, array):
         ]:
             if module.params["gateway"] not in IPNetwork(module.params["address"]):
                 module.fail_json(msg="Gateway and subnet are not compatible.")
-        if not module.params["gateway"] and interface.eth.gateway not in [
+        # current_state holds the gateway read with a default - reading
+        # interface.eth.gateway directly raises AttributeError on an
+        # interface that has no gateway configured
+        if not module.params["gateway"] and current_state["gateway"] not in [
             None,
             IPNetwork(module.params["address"]),
         ]:

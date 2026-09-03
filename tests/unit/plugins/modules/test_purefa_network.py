@@ -2203,6 +2203,169 @@ class TestUpdateInterfaceGatewayClearing:
 
         mock_module.exit_json.assert_called_once_with(changed=True)
 
+
+class FakeEth:
+    """Stand-in for the SDK's eth model.
+
+    py-pure-client models raise AttributeError for any field the array
+    returned as null rather than returning None. Mock objects do not, which
+    hides code paths that read an unset setting without a getattr default.
+    """
+
+    def __init__(self, **fields):
+        self._fields = fields
+
+    def __getattr__(self, name):
+        value = self._fields.get(name)
+        if value is None:
+            raise AttributeError(name)
+        return value
+
+
+def _eth_interface(eth, services=None):
+    interface = Mock()
+    interface.name = "ct0.eth4"
+    interface.enabled = True
+    interface.services = services if services is not None else ["iscsi"]
+    interface.eth = eth
+    return interface
+
+
+def _bringup_params(name="ct0.eth4"):
+    """Params for the play in issue #1029 - an iSCSI port with no gateway"""
+    return {
+        "name": name,
+        "state": "present",
+        "address": "10.21.200.10/24",
+        "gateway": None,
+        "mtu": 9000,
+        "servicelist": None,
+        "subinterfaces": None,
+        "subordinates": None,
+        "enabled": True,
+    }
+
+
+class TestCheckSubinterfacesUnset:
+    """Regression tests for issue #1029 - subinterfaces reported as null"""
+
+    def test_no_subinterfaces_returns_empty_list(self):
+        """A physical port with no children has subinterfaces unset"""
+        mock_module = Mock()
+        mock_module.params = {"name": "ct0.eth4"}
+
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(FakeEth(mtu=1500))]
+        )
+
+        assert _check_subinterfaces(mock_module, mock_array) == []
+
+    def test_subinterfaces_still_read(self):
+        """An interface with children still reports their names"""
+        mock_module = Mock()
+        mock_module.params = {"name": "ct0.eth4"}
+
+        eth = FakeEth(
+            mtu=1500, subinterfaces=[_subref("ct0.eth9"), _subref("ct1.eth9")]
+        )
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+
+        assert _check_subinterfaces(mock_module, mock_array) == [
+            "ct0.eth9",
+            "ct1.eth9",
+        ]
+
+
+class TestUpdateInterfaceUnsetFields:
+    """Regression tests for issue #1029 - unset gateway and subinterfaces"""
+
+    def test_set_address_with_no_gateway_or_subinterfaces(self):
+        """Bringing up an iSCSI port that has neither configured"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _bringup_params()
+
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(FakeEth(mtu=1500))]
+        )
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+        # The enable patch, then the IP settings patch through the
+        # empty-gateway path
+        assert mock_array.patch_network_interfaces.call_count == 2
+
+    def test_set_address_with_no_gateway_on_parent_interface(self):
+        """The gateway check is reached once subinterfaces are readable
+
+        Isolates the unset gateway read, which the unset subinterfaces read
+        above would otherwise mask by failing first.
+        """
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _bringup_params()
+
+        eth = FakeEth(mtu=1500, subinterfaces=[_subref("ct0.eth9")])
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    def test_no_change_when_nothing_differs(self):
+        """An interface with no gateway or subinterfaces is idempotent"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        params = _bringup_params()
+        params["address"] = None
+        params["mtu"] = None
+        mock_module.params = params
+
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(FakeEth(mtu=1500))]
+        )
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_array.patch_network_interfaces.assert_not_called()
+
+    def test_subinterfaces_read_into_current_state(self):
+        """An interface with children is still compared on their names"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        params = _bringup_params()
+        params["address"] = None
+        params["mtu"] = None
+        mock_module.params = params
+
+        eth = FakeEth(
+            mtu=1500, subinterfaces=[_subref("ct1.eth9"), _subref("ct0.eth9")]
+        )
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
     @patch("plugins.modules.purefa_network.check_response")
     def test_update_interface_clear_ipv6_gateway(self, mock_check_response):
         """Test clearing IPv6 gateway with ::"""
