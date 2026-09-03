@@ -158,6 +158,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_tgroup - manage topology groups and their memberships on the FlashArray
 - purefa_token - manage FlashArray user API tokens
 - purefa_timeout - manage the GUI idle timeout on the FlashArray
+- purefa_timezone - manage the system time zone on the FlashArray
 - purefa_user - manage local user accounts on the FlashArray
 - purefa_vg - manage volume groups on the FlashArray
 - purefa_vlan - manage VLAN interfaces on the FlashArray

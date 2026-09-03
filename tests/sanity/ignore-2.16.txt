@@ -113,6 +113,7 @@ plugins/modules/purefa_syslog.py import-2.7
 plugins/modules/purefa_syslog_settings.py import-2.7
 plugins/modules/purefa_tgroup.py import-2.7
 plugins/modules/purefa_timeout.py import-2.7
+plugins/modules/purefa_timezone.py import-2.7
 plugins/modules/purefa_token.py import-2.7
 plugins/modules/purefa_user.py import-2.7
 plugins/modules/purefa_vg.py import-2.7

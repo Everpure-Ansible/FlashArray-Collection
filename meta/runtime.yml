@@ -63,6 +63,7 @@ action_groups:
    - purefa_syslog_settings
    - purefa_tgroup
    - purefa_timeout
+   - purefa_timezone
    - purefa_token
    - purefa_user
    - purefa_vg
