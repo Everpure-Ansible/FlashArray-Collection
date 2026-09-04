@@ -2231,6 +2231,24 @@ def _eth_interface(eth, services=None):
     return interface
 
 
+class FakeInterface:
+    """Stand-in for the SDK's network interface model
+
+    Raises for unset fields the same way FakeEth does, for the settings read
+    from the interface itself rather than from its eth member.
+    """
+
+    def __init__(self, eth, **fields):
+        self.eth = eth
+        self._fields = fields
+
+    def __getattr__(self, name):
+        value = self._fields.get(name)
+        if value is None:
+            raise AttributeError(name)
+        return value
+
+
 def _bringup_params(name="ct0.eth4"):
     """Params for the play in issue #1029 - an iSCSI port with no gateway"""
     return {
@@ -2345,6 +2363,26 @@ class TestUpdateInterfaceUnsetFields:
         mock_module.exit_json.assert_called_once_with(changed=False)
         mock_array.patch_network_interfaces.assert_not_called()
 
+    def test_no_services_assigned(self):
+        """An interface with no services reported does not crash"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        params = _bringup_params()
+        params["address"] = None
+        params["mtu"] = None
+        mock_module.params = params
+
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200,
+            items=[FakeInterface(FakeEth(mtu=1500), name="ct0.eth4", enabled=True)],
+        )
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
     def test_subinterfaces_read_into_current_state(self):
         """An interface with children is still compared on their names"""
         mock_module = Mock()
@@ -2365,6 +2403,92 @@ class TestUpdateInterfaceUnsetFields:
         update_interface(mock_module, mock_array)
 
         mock_module.exit_json.assert_called_once_with(changed=False)
+
+
+class TestUpdateInterfaceKeptGatewayCompatibility:
+    """The existing gateway is checked against the new subnet by containment"""
+
+    def test_kept_gateway_inside_new_subnet_is_accepted(self):
+        """Readdressing within the same subnet keeps the existing gateway
+
+        The global IPNetwork stand-in reports every address as inside the
+        subnet, so a compatible gateway must not be rejected.
+        """
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _bringup_params()
+
+        eth = FakeEth(
+            mtu=9000,
+            address="10.21.200.9",
+            netmask="255.255.255.0",
+            gateway="10.21.200.1",
+        )
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_network.IPNetwork")
+    def test_kept_gateway_outside_new_subnet_is_rejected(self, mock_ipnetwork):
+        """Readdressing into a subnet the existing gateway is not in fails"""
+        network = MagicMock()
+        network.netmask = "255.255.255.0"
+        network.__contains__ = Mock(return_value=False)
+        mock_ipnetwork.return_value = network
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _bringup_params()
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+
+        eth = FakeEth(
+            mtu=9000,
+            address="192.168.1.9",
+            netmask="255.255.255.0",
+            gateway="192.168.1.1",
+        )
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+
+        try:
+            update_interface(mock_module, mock_array)
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_called_with(
+            msg="Gateway and subnet are not compatible."
+        )
+
+    def test_cleared_gateway_is_not_checked(self):
+        """A gateway already cleared to 0.0.0.0 is not validated"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _bringup_params()
+
+        eth = FakeEth(
+            mtu=9000,
+            address="10.21.200.9",
+            netmask="255.255.255.0",
+            gateway="0.0.0.0",
+        )
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_eth_interface(eth)]
+        )
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        update_interface(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
 
     @patch("plugins.modules.purefa_network.check_response")
     def test_update_interface_clear_ipv6_gateway(self, mock_check_response):
@@ -2995,8 +3119,10 @@ class TestUpdateInterfaceGatewayOnlyBugFixes:
     ):
         """Test clearing IPv4 address with 0.0.0.0/0 without specifying gateway - should not crash"""
         mock_valid_ipv4.return_value = True
-        mock_net = Mock()
+        mock_net = MagicMock()
         mock_net.netmask = "0.0.0.0"
+        # 0.0.0.0/0 contains any existing gateway
+        mock_net.__contains__ = Mock(return_value=True)
         mock_ipnetwork.return_value = mock_net
 
         mock_module = Mock()
