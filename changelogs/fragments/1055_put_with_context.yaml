@@ -1,0 +1,3 @@
+minor_changes:
+  - api_helpers - Add put_with_context, the verb alias the helper family was
+    missing. PUT endpoints were previously reached through get_with_context.
