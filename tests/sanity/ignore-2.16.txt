@@ -83,6 +83,7 @@ plugins/modules/purefa_host.py import-2.7
 plugins/modules/purefa_info.py import-2.7
 plugins/modules/purefa_inventory.py import-2.7
 plugins/modules/purefa_kmip.py import-2.7
+plugins/modules/purefa_lds.py import-2.7
 plugins/modules/purefa_logging.py import-2.7
 plugins/modules/purefa_maintenance.py import-2.7
 plugins/modules/purefa_messages.py import-2.7

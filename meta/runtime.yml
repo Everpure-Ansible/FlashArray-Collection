@@ -33,6 +33,7 @@ action_groups:
    - purefa_info
    - purefa_inventory
    - purefa_kmip
+   - purefa_lds
    - purefa_logging
    - purefa_maintenance
    - purefa_messages
