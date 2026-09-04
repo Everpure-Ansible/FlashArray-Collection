@@ -883,31 +883,37 @@ def generate_clients_dict(array):
 
 
 def generate_admin_dict(array):
+    """Return the array's administrators
+
+    Every field here is read through getattr, because the SDK models raise
+    AttributeError for anything the array returned as null rather than giving
+    back None. An admin with no public key - which is every admin by default -
+    used to take the whole gather down with it, and a remote user whose role
+    comes back as an empty reference did the same on role.name.
+    """
     admin_info = {}
     admins = list(array.get_admins().items)
     for admin in admins:
         admin_name = admin.name
         admin_info[admin_name] = {
-            "public_key": admin.public_key,
-            "local": admin.is_local,
-            "role": admin.role.name,
-            "locked": admin.locked,
+            "public_key": getattr(admin, "public_key", None),
+            "local": getattr(admin, "is_local", None),
+            "role": getattr(getattr(admin, "role", None), "name", None),
+            "locked": getattr(admin, "locked", None),
             "lockout_remaining": getattr(admin, "lockout_remaining", None),
         }
-        if hasattr(admin.api_token, "expires_at"):
-            if admin.api_token.expires_at:
-                admin_info[admin_name]["token_expires"] = datetime.fromtimestamp(
-                    admin.api_token.expires_at / 1000
+        token = getattr(admin, "api_token", None)
+        for field, key in (
+            ("expires_at", "token_expires"),
+            ("created_at", "token_created"),
+        ):
+            stamp = getattr(token, field, None)
+            if stamp:
+                admin_info[admin_name][key] = datetime.fromtimestamp(
+                    stamp / 1000
                 ).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            admin_info[admin_name]["token_expires"] = None
-        if hasattr(admin.api_token, "created_at"):
-            if admin.api_token.created_at:
-                admin_info[admin_name]["token_created"] = datetime.fromtimestamp(
-                    admin.api_token.created_at / 1000
-                ).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            admin_info[admin_name]["token_created"] = None
+            else:
+                admin_info[admin_name][key] = None
     return admin_info
 
 
