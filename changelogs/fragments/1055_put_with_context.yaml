@@ -1,3 +1,12 @@
 minor_changes:
   - api_helpers - Add put_with_context, the verb alias the helper family was
     missing. PUT endpoints were previously reached through get_with_context.
+bugfixes:
+  - purefa_volume_tags - Fix I(state=absent) so that it actually removes tags.
+    The keys from I(kvp) were compared as single-element tuples against key
+    strings, so nothing ever matched and the module reported no change.
+  - purefa_volume_tags - Fix the I(tag) option, which was documented and
+    accepted but never read, so removing tags by key did nothing. Used on its
+    own it also raised a TypeError.
+  - purefa_volume_tags - Accept C(keys) as an alias for I(tag), matching the
+    option name used by M(everpure.flasharray.purefa_tags).
