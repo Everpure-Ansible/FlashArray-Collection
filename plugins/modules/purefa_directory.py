@@ -157,10 +157,6 @@ def check_renamed_dir(module, array):
                 module.params["filesystem"] + ":" + module.params["name"]
             )
         )
-    if list(res.items)[0].destroyed:
-        module.fail_json(
-            msg="Directory {0} exists, but in destroyed state".format(target_name)
-        )
     module.exit_json(changed=False)
 
 
@@ -280,16 +276,22 @@ def main():
     )
     exists = bool(res.status_code == 200)
 
+    # Destroying a file system implicitly destroys the directories in it, and
+    # the array then refuses to create a directory ("File system has been
+    # destroyed.") or to rename one ("Managed directory cannot be renamed
+    # because it is implicitly destroyed."). Say so, rather than reporting no
+    # change and leaving the play believing the work was done.
+    if state == "present" and filesystem.destroyed:
+        module.fail_json(
+            msg="File system {0} is destroyed, so directories in it cannot be "
+            "created or renamed".format(module.params["filesystem"])
+        )
+
     if state == "present" and not exists and module.params["rename"]:
         check_renamed_dir(module, array)
     elif state == "present" and not exists:
         create_dir(module, array)
-    elif (
-        state == "present"
-        and exists
-        and module.params["rename"]
-        and not filesystem.destroyed
-    ):
+    elif state == "present" and exists and module.params["rename"]:
         rename_dir(module, array)
     elif state == "absent" and exists:
         delete_dir(module, array)
