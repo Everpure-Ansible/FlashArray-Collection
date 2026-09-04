@@ -36,7 +36,7 @@ options:
         admins, volumes, snapshots, pods, replication, vgroups, offload, apps,
         arrays, certs, kmip, clients, policies, dir_snaps, filesystems,
         alerts, virtual_machines, subscriptions, realms, fleet, presets,
-        workloads and tgroups.
+        workloads, tgroups, software and support.
     type: list
     elements: str
     required: false
@@ -95,6 +95,7 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.version import
 )
 
 from datetime import datetime
+import json
 import time
 
 SEC_TO_DAY = 86400000
@@ -124,6 +125,12 @@ CONTEXT_API_VERSION = "2.38"
 QUOTA_API_VERSION = "2.42"
 TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
+# The support and software read endpoints each arrived separately
+SOFTWARE_STEPS_API_VERSION = "2.2"
+SOFTWARE_VERSIONS_API_VERSION = "2.9"
+SOFTWARE_PATCHES_API_VERSION = "2.17"
+SUPPORT_DIAGS_API_VERSION = "2.36"
+SUPPORT_MANIFEST_API_VERSION = "2.51"
 
 
 def _is_cbs(array):
@@ -3290,6 +3297,119 @@ def generate_realms_dict(array, performance):
     return realms_info
 
 
+def generate_software_dict(array, api_version):
+    """Return the software versions, patch catalogue and upgrade history
+
+    Each of the three endpoints arrived in a different release, so each is
+    guarded on its own rather than the newest of the three.
+    """
+    software_info = {"versions": {}, "patches": {}, "installation_steps": {}}
+    if LooseVersion(SOFTWARE_VERSIONS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_versions()
+        if res.status_code == 200:
+            for version in list(res.items):
+                software_info["versions"][version.name] = {
+                    "version": getattr(version, "version", None),
+                    "release_family": getattr(version, "release_family", None),
+                    "details": getattr(version, "details", None),
+                    "upgrade_hops": getattr(version, "upgrade_hops", None),
+                }
+    if LooseVersion(SOFTWARE_PATCHES_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_patches_catalog()
+        if res.status_code == 200:
+            for patch in list(res.items):
+                software_info["patches"][patch.name] = {
+                    "description": getattr(patch, "description", None),
+                    "details": getattr(patch, "details", None),
+                    "status": getattr(patch, "status", None),
+                    "progress": getattr(patch, "progress", None),
+                    "alert_code": getattr(patch, "alert_code", None),
+                    "ha_reduction_required": getattr(
+                        patch, "ha_reduction_required", None
+                    ),
+                }
+    if LooseVersion(SOFTWARE_STEPS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_installation_steps()
+        if res.status_code == 200:
+            for step in list(res.items):
+                # steps repeat their name across upgrades, so key on the id
+                software_info["installation_steps"][step.id] = {
+                    "name": getattr(step, "name", None),
+                    "description": getattr(step, "description", None),
+                    "details": getattr(step, "details", None),
+                    "status": getattr(step, "status", None),
+                    "hop_version": getattr(step, "hop_version", None),
+                    "installation": getattr(
+                        getattr(step, "installation", None), "name", None
+                    ),
+                    "start_time": getattr(step, "start_time", None),
+                    "end_time": getattr(step, "end_time", None),
+                    "checks": [
+                        {
+                            "name": getattr(check, "name", None),
+                            "details": getattr(check, "details", None),
+                        }
+                        for check in (getattr(step, "checks", None) or [])
+                    ],
+                }
+    return software_info
+
+
+def generate_support_dict(array, api_version):
+    """Return support diagnostics and a summary of the system manifest
+
+    The manifest comes back as a single JSON document of tens of kilobytes -
+    42KB on the array this was written against. Reporting it whole would weigh
+    down every gather that asks for everything, so the useful header fields are
+    pulled out and the bulk left behind.
+    """
+    support_info = {"diagnostics": {}, "manifest": {}}
+    if LooseVersion(SUPPORT_DIAGS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_support_diagnostics_details()
+        if res.status_code == 200:
+            for diag in list(res.items):
+                support_info["diagnostics"][getattr(diag, "test_name", "unknown")] = {
+                    "test_type": getattr(diag, "test_type", None),
+                    "severity": getattr(diag, "severity", None),
+                    "result_details": getattr(diag, "result_details", None),
+                }
+    if LooseVersion(SUPPORT_MANIFEST_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_support_system_manifest()
+        if res.status_code == 200:
+            item = next(iter(list(res.items)), None)
+            raw = getattr(item, "system_manifest", None) if item else None
+            manifest = {}
+            if isinstance(raw, str):
+                try:
+                    manifest = json.loads(raw)
+                except ValueError:
+                    manifest = {}
+            elif isinstance(raw, dict):
+                manifest = raw
+            for field in (
+                "manifest_version",
+                "manifest_source",
+                "product_family",
+                "purity_version",
+                "array_name",
+                "appliance_id",
+                "domain",
+                "time_zone",
+                "timestamp",
+            ):
+                support_info["manifest"][field] = manifest.get(field)
+            support_info["manifest"]["licensed_features"] = manifest.get(
+                "licensed_features"
+            )
+            # the component inventory is the bulk of the document - report how
+            # much there is rather than all of it
+            components = manifest.get("components")
+            if isinstance(components, (list, dict)):
+                support_info["manifest"]["component_count"] = len(components)
+            support_info["manifest"]["raw_length"] = len(raw) if raw else 0
+    return support_info
+
+
 def main():
     argument_spec = purefa_argument_spec()
     argument_spec.update(
@@ -3335,6 +3455,8 @@ def main():
         "presets",
         "workloads",
         "tgroups",
+        "software",
+        "support",
     )
     subset_test = (test in valid_subsets for test in subset)
     if not all(subset_test):
@@ -3439,6 +3561,10 @@ def main():
         "tgroups" in subset or "all" in subset
     ):
         info["tgroups"] = generate_tgroups_dict(array)
+    if "software" in subset or "all" in subset:
+        info["software"] = generate_software_dict(array, api_version)
+    if "support" in subset or "all" in subset:
+        info["support"] = generate_support_dict(array, api_version)
     module.exit_json(changed=False, purefa_info=info)
 
 

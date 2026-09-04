@@ -2088,3 +2088,177 @@ class TestGenerateClientsDict:
         assert result["api-client-1"]["enabled"] is True
         assert result["api-client-1"]["client_id"] == "client-id-123"
         assert result["api-client-1"]["access_token_ttl_seconds"] == 3600
+
+
+class TestGenerateSoftwareDict:
+    """Tests for generate_software_dict"""
+
+    @staticmethod
+    def _array(**responses):
+        array = Mock()
+        for name, value in responses.items():
+            getattr(array, name).return_value = value
+        return array
+
+    def test_each_endpoint_guarded_on_its_own_version(self):
+        """Test an array too old for one endpoint still reports the others
+
+        The three endpoints arrived in 2.2, 2.9 and 2.17, so a single floor
+        would hide data an older array can serve.
+        """
+        from plugins.modules.purefa_info import generate_software_dict
+
+        step = Mock()
+        step.id = "step-1"
+        step.name = "pre-upgrade check"
+        step.status = "finished"
+        step.checks = []
+        array = self._array(
+            get_software_installation_steps=Mock(status_code=200, items=[step]),
+        )
+
+        out = generate_software_dict(array, "2.2")
+
+        assert list(out["installation_steps"]) == ["step-1"]
+        assert out["versions"] == {}
+        assert out["patches"] == {}
+        array.get_software_versions.assert_not_called()
+        array.get_software_patches_catalog.assert_not_called()
+
+    def test_all_three_on_a_current_array(self):
+        from plugins.modules.purefa_info import generate_software_dict
+
+        version = Mock()
+        version.name = "6.10.6"
+        patch = Mock()
+        patch.name = "patch-1"
+        step = Mock()
+        step.id = "step-1"
+        step.checks = []
+        array = self._array(
+            get_software_versions=Mock(status_code=200, items=[version]),
+            get_software_patches_catalog=Mock(status_code=200, items=[patch]),
+            get_software_installation_steps=Mock(status_code=200, items=[step]),
+        )
+
+        out = generate_software_dict(array, "2.56")
+
+        assert list(out["versions"]) == ["6.10.6"]
+        assert list(out["patches"]) == ["patch-1"]
+        assert list(out["installation_steps"]) == ["step-1"]
+
+    def test_installation_steps_keyed_on_id_not_name(self):
+        """Step names repeat across upgrades, so the id is the key"""
+        from plugins.modules.purefa_info import generate_software_dict
+
+        first, second = Mock(), Mock()
+        first.id, second.id = "a", "b"
+        first.name = second.name = "pre-upgrade check"
+        first.checks = second.checks = []
+        array = self._array(
+            get_software_installation_steps=Mock(
+                status_code=200, items=[first, second]
+            ),
+        )
+
+        out = generate_software_dict(array, "2.2")
+
+        assert sorted(out["installation_steps"]) == ["a", "b"]
+
+    def test_a_failed_read_is_not_fatal(self):
+        from plugins.modules.purefa_info import generate_software_dict
+
+        array = self._array(
+            get_software_versions=Mock(status_code=400, items=[]),
+            get_software_patches_catalog=Mock(status_code=400, items=[]),
+            get_software_installation_steps=Mock(status_code=400, items=[]),
+        )
+
+        out = generate_software_dict(array, "2.56")
+
+        assert out == {"versions": {}, "patches": {}, "installation_steps": {}}
+
+
+class TestGenerateSupportDict:
+    """Tests for generate_support_dict"""
+
+    @staticmethod
+    def _manifest_array(raw):
+        array = Mock()
+        item = Mock()
+        item.system_manifest = raw
+        array.get_support_system_manifest.return_value = Mock(
+            status_code=200, items=[item]
+        )
+        array.get_support_diagnostics_details.return_value = Mock(
+            status_code=200, items=[]
+        )
+        return array
+
+    def test_manifest_is_summarised_not_copied(self):
+        """Test only the header fields are kept
+
+        The manifest is a single JSON document of tens of kilobytes, so the
+        bulk of it is deliberately left out.
+        """
+        import json
+
+        from plugins.modules.purefa_info import generate_support_dict
+
+        raw = json.dumps(
+            {
+                "manifest_version": 1.0,
+                "purity_version": "6.10.6",
+                "array_name": "arrayone",
+                "components": [{"a": 1}, {"b": 2}, {"c": 3}],
+                "licensed_features": ["one"],
+                "space": {"lots": "of detail"},
+            }
+        )
+
+        out = generate_support_dict(self._manifest_array(raw), "2.56")
+
+        assert out["manifest"]["purity_version"] == "6.10.6"
+        assert out["manifest"]["array_name"] == "arrayone"
+        assert out["manifest"]["component_count"] == 3
+        assert out["manifest"]["raw_length"] == len(raw)
+        # the bulky members are not carried through
+        assert "components" not in out["manifest"]
+        assert "space" not in out["manifest"]
+
+    def test_unparseable_manifest_does_not_raise(self):
+        from plugins.modules.purefa_info import generate_support_dict
+
+        out = generate_support_dict(self._manifest_array("not json at all"), "2.56")
+
+        assert out["manifest"]["purity_version"] is None
+        assert out["manifest"]["raw_length"] == len("not json at all")
+
+    def test_manifest_skipped_on_an_older_array(self):
+        from plugins.modules.purefa_info import generate_support_dict
+
+        array = self._manifest_array("{}")
+
+        out = generate_support_dict(array, "2.40")
+
+        assert out["manifest"] == {}
+        array.get_support_system_manifest.assert_not_called()
+        array.get_support_diagnostics_details.assert_called_once()
+
+    def test_diagnostics_keyed_on_test_name(self):
+        from plugins.modules.purefa_info import generate_support_dict
+
+        diag = Mock()
+        diag.test_name = "a check"
+        diag.test_type = "hardware"
+        diag.severity = "info"
+        diag.result_details = "all good"
+        array = Mock()
+        array.get_support_diagnostics_details.return_value = Mock(
+            status_code=200, items=[diag]
+        )
+        array.get_support_system_manifest.return_value = Mock(status_code=200, items=[])
+
+        out = generate_support_dict(array, "2.56")
+
+        assert out["diagnostics"]["a check"]["severity"] == "info"
