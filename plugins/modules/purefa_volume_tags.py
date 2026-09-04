@@ -21,6 +21,10 @@ version_added: '1.0.0'
 short_description:  Manage volume tags on Everpure FlashArrays
 description:
 - Manage volume tags for volumes on Everpure FlashArray.
+- This module is superseded by M(everpure.flasharray.purefa_tags), which
+  manages tags on volumes and on every other taggable resource. Use that
+  module from now on. This one still works and will be deprecated in a future
+  release.
 - Requires a minimum of Purity 6.0.0
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
@@ -46,13 +50,17 @@ options:
     - Separate the key from the value using a colon (:) only.
     - All items in list will use I(namespace) and I(copyable) settings.
     - See examples for exact formatting requirements
+    - With I(state=absent) and no I(tag), the keys of these pairs are the tags
+      removed and their values are ignored.
     type: list
     elements: str
   tag:
     description:
-    - List of volume tags to be deleted from a volume
+    - List of tag keys to remove from the volume, for use with I(state=absent).
+    - Takes precedence over the keys in I(kvp).
     type: list
     elements: str
+    aliases: [ keys ]
     version_added: "1.38.0"
   state:
     description:
@@ -120,6 +128,7 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.purefa import 
     purefa_argument_spec,
 )
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
+    delete_with_context,
     get_with_context,
     check_response,
 )
@@ -227,33 +236,36 @@ def update_tags(module, array, current_tags):
 
 
 def delete_tags(module, array, current_tags):
-    """Delete Tags"""
-    changed = False
-    now_tags = []
-    old_tags = []
-    for tag in current_tags:
-        now_tags.append(tag.key)
-    for old_tag in module.params["kvp"]:
-        old_tags.append((old_tag,))
-    del_tags = list(set(old_tags) & set(now_tags))
-    if del_tags:
-        changed = True
-        if not module.check_mode:
-            for tag in del_tags:
-                res = get_with_context(
-                    array,
-                    "delete_volumes_tags",
-                    CONTEXT_API_VERSION,
-                    module,
-                    resource_names=[module.params["name"]],
-                    keys=[tag],
-                    namespaces=[module.params["namespace"]],
-                )
-                check_response(
-                    res,
-                    module,
-                    f"Failed to remove tag {tag} from volume {module.params['name']}",
-                )
+    """Delete Tags
+
+    Removal works on keys. I(tag) names them directly; failing that the keys of
+    I(kvp) are used and their values ignored, so the same list that created the
+    tags can remove them.
+    """
+    if module.params["tag"]:
+        requested = list(module.params["tag"])
+    else:
+        requested = [pair.split(":")[0] for pair in module.params["kvp"] or []]
+    if not requested:
+        module.fail_json(msg="tag or kvp is required to remove volume tags")
+    held = {tag.key for tag in current_tags}
+    doomed = sorted(set(requested) & held)
+    changed = bool(doomed)
+    if doomed and not module.check_mode:
+        res = delete_with_context(
+            array,
+            "delete_volumes_tags",
+            CONTEXT_API_VERSION,
+            module,
+            resource_names=[module.params["name"]],
+            keys=doomed,
+            namespaces=[module.params["namespace"]],
+        )
+        check_response(
+            res,
+            module,
+            f"Failed to remove tags from volume {module.params['name']}",
+        )
     module.exit_json(changed=changed)
 
 
@@ -266,12 +278,19 @@ def main():
             namespace=dict(type="str", default="default"),
             state=dict(type="str", default="present", choices=["absent", "present"]),
             kvp=dict(type="list", elements="str"),
-            tag=dict(type="list", elements="str"),
+            tag=dict(type="list", elements="str", aliases=["keys"]),
             context=dict(type="str", default=""),
         )
     )
 
     module = AnsibleModule(argument_spec, supports_check_mode=True)
+
+    module.warn(
+        "purefa_volume_tags is superseded by purefa_tags, which manages tags "
+        "on volumes and every other taggable resource. Use "
+        "purefa_tags with resource_type: volume from now on. This module still "
+        "works and will be deprecated in a future release."
+    )
 
     state = module.params["state"]
     array = get_array(module)

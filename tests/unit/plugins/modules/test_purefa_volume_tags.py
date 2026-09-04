@@ -243,23 +243,115 @@ class TestUpdateTags:
 class TestDeleteTags:
     """Tests for delete_tags function"""
 
-    def test_delete_tags_no_match(self):
-        """Test delete_tags when tags don't match"""
+    @staticmethod
+    def _module(**params):
         mock_module = Mock()
-        mock_module.params = {
+        base = {
             "name": "test-vol",
             "context": "",
-            "kvp": ["nonexistent"],
+            "kvp": None,
+            "tag": None,
             "namespace": "default",
         }
+        base.update(params)
+        mock_module.params = base
         mock_module.check_mode = False
-        mock_array = Mock()
+        mock_module.fail_json.side_effect = SystemExit(1)
+        return mock_module
 
-        # Current tags don't include the tag to delete
-        mock_tag = Mock()
-        mock_tag.key = "env"
-        current_tags = [mock_tag]
+    @staticmethod
+    def _tags(*keys):
+        out = []
+        for key in keys:
+            tag = Mock()
+            tag.key = key
+            out.append(tag)
+        return out
 
-        delete_tags(mock_module, mock_array, current_tags)
+    def test_delete_tags_no_match(self):
+        """Test delete_tags when tags don't match"""
+        mock_module = self._module(kvp=["nonexistent"])
+
+        delete_tags(mock_module, Mock(), self._tags("env"))
 
         mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_volume_tags.check_response")
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_by_kvp_key(self, mock_delete, mock_check):
+        """Test the keys of kvp remove the tags, values ignored
+
+        The old code compared one-element tuples against key strings, so this
+        never matched and nothing was ever deleted.
+        """
+        mock_module = self._module(kvp=["env:whatever"])
+        mock_delete.return_value = Mock(status_code=200)
+
+        delete_tags(mock_module, Mock(), self._tags("env", "owner"))
+
+        assert mock_delete.call_args[1]["keys"] == ["env"]
+        assert mock_delete.call_args[1]["namespaces"] == ["default"]
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_volume_tags.check_response")
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_by_tag_option(self, mock_delete, mock_check):
+        """Test the documented tag option removes tags
+
+        It was declared and documented but never read, so it did nothing. With
+        kvp left unset the old code also raised TypeError iterating None.
+        """
+        mock_module = self._module(tag=["env", "owner"])
+        mock_delete.return_value = Mock(status_code=200)
+
+        delete_tags(mock_module, Mock(), self._tags("env", "owner", "keep"))
+
+        assert mock_delete.call_args[1]["keys"] == ["env", "owner"]
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_volume_tags.check_response")
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_only_removes_what_is_there(self, mock_delete, mock_check):
+        """Test a key the volume does not carry is not sent for deletion"""
+        mock_module = self._module(tag=["env", "nosuch"])
+        mock_delete.return_value = Mock(status_code=200)
+
+        delete_tags(mock_module, Mock(), self._tags("env"))
+
+        assert mock_delete.call_args[1]["keys"] == ["env"]
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_tag_wins_over_kvp(self, mock_delete):
+        """Test tag takes precedence over the keys in kvp"""
+        mock_module = self._module(tag=["owner"], kvp=["env:x"])
+        mock_delete.return_value = Mock(status_code=200)
+
+        with patch("plugins.modules.purefa_volume_tags.check_response"):
+            delete_tags(mock_module, Mock(), self._tags("env", "owner"))
+
+        assert mock_delete.call_args[1]["keys"] == ["owner"]
+
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_check_mode(self, mock_delete):
+        """Test check mode predicts the removal without making it"""
+        mock_module = self._module(tag=["env"])
+        mock_module.check_mode = True
+
+        delete_tags(mock_module, Mock(), self._tags("env"))
+
+        mock_delete.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_volume_tags.delete_with_context")
+    def test_delete_tags_nothing_requested_fails(self, mock_delete):
+        """Test state=absent with neither option says so"""
+        import pytest
+
+        mock_module = self._module()
+
+        with pytest.raises(SystemExit):
+            delete_tags(mock_module, Mock(), self._tags("env"))
+
+        assert "tag or kvp is required" in mock_module.fail_json.call_args[1]["msg"]
+        mock_delete.assert_not_called()

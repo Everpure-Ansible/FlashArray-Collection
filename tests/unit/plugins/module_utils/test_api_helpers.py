@@ -63,6 +63,7 @@ from plugins.module_utils.api_helpers import (
     check_api_version,
     get_local_array_name,
     get_with_context,
+    put_with_context,
     wait_for,
 )
 
@@ -618,3 +619,46 @@ class TestWaitForSkipInCheckMode:
         )
 
         assert result is finished
+
+
+class TestPutWithContext:
+    """Tests for put_with_context function.
+
+    It is an alias for get_with_context, so what matters is that a PUT method
+    is reached and that context is still applied.
+    """
+
+    def test_calls_put_method(self, mock_module, mock_array):
+        """Test the named put method is called with the arguments given."""
+        mock_array.put_hosts_tags_batch = Mock()
+
+        put_with_context(
+            mock_array,
+            "put_hosts_tags_batch",
+            "2.38",
+            mock_module,
+            resource_names=["host1"],
+            tag=["a-tag"],
+        )
+
+        mock_array.put_hosts_tags_batch.assert_called_once_with(
+            resource_names=["host1"], tag=["a-tag"]
+        )
+
+    def test_adds_context_when_supported(self, mock_module):
+        """Test context_names is added just as it is for the other verbs."""
+        array = Mock(spec=["get_rest_version", "put_hosts_tags_batch"])
+        array.get_rest_version.return_value = "2.38"
+        mock_module.params["context"] = "pod1"
+
+        put_with_context(
+            array,
+            "put_hosts_tags_batch",
+            "2.38",
+            mock_module,
+            resource_names=["host1"],
+        )
+
+        array.put_hosts_tags_batch.assert_called_once_with(
+            resource_names=["host1"], context_names=["pod1"]
+        )
