@@ -1,0 +1,4 @@
+bugfixes:
+  - purefa_info - Fixed ``AttributeError`` traceback when an array returns a null space value, which aborted the whole gather. The SDK client is created with ``model_attribute_error_on_none`` at its default of ``True``, so reading a declared-but-null field raises instead of returning ``None``. All space attribute reads are now guarded, affecting the ``volumes``, ``snapshots``, ``pods``, ``vgroups``, ``filesystems`` and ``capacity`` subsets
+  - purefa_info - Fixed ``data_reduction``, ``total_reduction`` and ``used_provisioned`` being returned as single-element lists instead of numbers, caused by a trailing comma wrapping the value in a tuple, for volumes, volume groups and volume snapshots
+  - purefa_info - Added missing ``total_effective`` to destroyed volumes, which is already returned for live volumes
