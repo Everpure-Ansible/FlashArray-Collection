@@ -129,7 +129,7 @@ def get_array(module):
         system.get_hardware()
     except Exception:
         module.fail_json(
-            msg="Pure Storage FlashArray authentication failed. Check your credentials"
+            msg="Everpure FlashArray authentication failed. Check your credentials"
         )
     return system
 

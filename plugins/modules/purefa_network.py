@@ -178,6 +178,25 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
     check_response,
 )
 
+# An unconfigured address, netmask or gateway is reported by the array as null,
+# but is cleared by writing 0.0.0.0 (or :: for IPv6). Those describe the same
+# state, so both have to be reduced to a single representation before the
+# current and desired settings can be compared - otherwise clearing an address
+# looks like a change that still needs making on every subsequent run.
+UNSET_IP = (None, "", "0.0.0.0", "::")
+UNSET_NETMASK = (None, "", "0.0.0.0", "0")
+
+
+def _comparable_state(state):
+    """Return a copy of an interface state with cleared IP settings unified"""
+    comparable = dict(state)
+    for setting in ("address", "gateway"):
+        if comparable[setting] in UNSET_IP:
+            comparable[setting] = ""
+    if comparable["netmask"] in UNSET_NETMASK:
+        comparable["netmask"] = ""
+    return comparable
+
 
 def update_fc_interface(module, array, interface):
     """Modify FC Interface settings"""
@@ -390,14 +409,9 @@ def update_interface(module, array):
         # one, so that gateway has to sit inside the new subnet. current_state
         # holds it read with a default - reading interface.eth.gateway directly
         # raises AttributeError on an interface that has no gateway configured.
-        # A gateway is reported as null when it has never been set, and as
-        # 0.0.0.0 or :: once it has been cleared
-        if not module.params["gateway"] and current_state["gateway"] not in (
-            None,
-            "",
-            "0.0.0.0",
-            "::",
-        ):
+        # UNSET_IP covers both ways the array reports no gateway: null when one
+        # has never been set, 0.0.0.0 or :: once it has been cleared.
+        if not module.params["gateway"] and current_state["gateway"] not in UNSET_IP:
             if current_state["gateway"] not in IPNetwork(module.params["address"]):
                 module.fail_json(msg="Gateway and subnet are not compatible.")
         new_state["address"] = str(module.params["address"].split("/", 1)[0])
@@ -454,7 +468,7 @@ def update_interface(module, array):
                     module.fail_json(
                         msg="Changing IP protocol requires gateway to change as well."
                     )
-    if new_state != current_state:
+    if _comparable_state(new_state) != _comparable_state(current_state):
         changed = True
         if module.params["servicelist"] and sorted(
             module.params["servicelist"]

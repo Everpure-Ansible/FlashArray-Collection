@@ -1,0 +1,3 @@
+bugfixes:
+  - purefa_audits - Fixed the ``pytz`` requirement check never firing, so a missing ``pytz`` failed with ``NameError`` instead of reporting the missing requirement
+  - purefa_sessions - Fixed the ``pytz`` requirement check never firing, so a missing ``pytz`` failed with ``NameError`` instead of reporting the missing requirement

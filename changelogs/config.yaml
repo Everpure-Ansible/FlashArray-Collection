@@ -26,6 +26,6 @@ sections:
     - Bugfixes
   - - known_issues
     - Known Issues
-title: Purestorage.Flasharray
+title: Everpure.Flasharray
 trivial_section_name: trivial
 use_fqcn: true
