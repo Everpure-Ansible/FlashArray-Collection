@@ -1,0 +1,2 @@
+minor_changes:
+  - Completed the rename to Everpure in the remaining user-visible strings, including the documentation fragment shown by ``ansible-doc`` for every module, the FlashArray authentication failure message, and the title of the generated changelog
