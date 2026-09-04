@@ -1,6 +1,6 @@
 # FlashArray Collection - Test Suite
 
-This directory contains the test suite for the Pure Storage FlashArray Ansible Collection.
+This directory contains the test suite for the Everpure FlashArray Ansible Collection.
 
 ## Test Statistics
 

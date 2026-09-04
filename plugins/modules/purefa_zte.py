@@ -77,7 +77,7 @@ options:
     description:
     - Skip the phonehome connectivity check when starting ZTE.
     - Must be set to C(true) for darksite arrays that do not have connectivity
-      to Pure Storage cloud servers, otherwise the reset will fail the
+      to Everpure cloud servers, otherwise the reset will fail the
       phonehome connectivity check.
     - Only used when I(state=start).
     type: bool
