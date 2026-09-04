@@ -182,7 +182,9 @@ def create_lds(module, array):
         check_response(
             res,
             module,
-            f"Failed to create local directory service {module.params['name']}",
+            "Failed to create local directory service {0}".format(
+                module.params["name"]
+            ),
         )
     module.exit_json(changed=True)
 
@@ -207,8 +209,8 @@ def update_lds(module, array, lds):
         check_response(
             res,
             module,
-            f"Failed to change the domain of local directory service "
-            f"{module.params['name']}",
+            "Failed to change the domain of local directory service "
+            "{0}".format(module.params["name"]),
         )
     module.exit_json(changed=changed)
 
@@ -233,7 +235,9 @@ def rename_lds(module, array):
         check_response(
             res,
             module,
-            f"Failed to rename local directory service {module.params['name']}",
+            "Failed to rename local directory service {0}".format(
+                module.params["name"]
+            ),
         )
     module.exit_json(changed=True)
 
@@ -267,7 +271,9 @@ def delete_lds(module, array):
         check_response(
             res,
             module,
-            f"Failed to delete local directory service {module.params['name']}",
+            "Failed to delete local directory service {0}".format(
+                module.params["name"]
+            ),
         )
     module.exit_json(changed=True)
 
