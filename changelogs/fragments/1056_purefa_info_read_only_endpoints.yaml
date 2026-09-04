@@ -1,0 +1,14 @@
+minor_changes:
+  - purefa_info - Add C(software) subset, reporting software versions, the patch
+    catalogue and upgrade installation steps.
+  - purefa_info - Add C(support) subset, reporting support diagnostics and a
+    summary of the system manifest.
+  - purefa_info - Report per-directory quotas, and the directory user and group
+    quotas and listings, in the C(filesystems) subset.
+  - purefa_info - Report replication throughput and lag in the C(replication)
+    subset, covering pod replica links, pods, protection groups and snapshot
+    transfers.
+bugfixes:
+  - purefa_info - Fix the C(admins) subset, and therefore C(all), crashing on an
+    array whose administrators have no public key. The field is null by default
+    and the SDK raises rather than returning None.
