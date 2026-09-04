@@ -47,6 +47,8 @@ sys.modules["ansible_collections.everpure.flasharray.plugins.module_utils.versio
 from plugins.modules.purefa_directory import (
     delete_dir,
     rename_dir,
+    rename_target,
+    check_renamed_dir,
     create_dir,
 )
 
@@ -494,3 +496,276 @@ class TestRenameCheckMode:
 
         # In check mode, should report changed=True but not make the patch call
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestRenameTarget:
+    """Test cases for rename_target function"""
+
+    def test_rename_target_qualifies_with_filesystem(self):
+        """Test rename_target prefixes the target with the file system"""
+        mock_module = Mock()
+        mock_module.params = {"filesystem": "fs1", "name": "dir1", "rename": "dir2"}
+
+        assert rename_target(mock_module) == "fs1:dir2"
+
+
+class TestCheckRenamedDir:
+    """Test cases for check_renamed_dir function
+
+    This is the second run of a rename task, when the source directory has
+    already gone.
+    """
+
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    def test_check_renamed_dir_already_renamed(self, mock_get):
+        """Test check_renamed_dir reports no change once the target is there"""
+        mock_module = Mock()
+        mock_module.params = {
+            "filesystem": "fs1",
+            "name": "dir1",
+            "rename": "dir2",
+            "context": "",
+        }
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = False
+        mock_get.return_value = Mock(status_code=200, items=[mock_target])
+
+        check_renamed_dir(mock_module, mock_array)
+
+        assert mock_get.call_args[1]["names"] == ["fs1:dir2"]
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    def test_check_renamed_dir_neither_exists_fails(self, mock_get):
+        """Test check_renamed_dir fails rather than creating the source"""
+        mock_module = Mock()
+        mock_module.params = {
+            "filesystem": "fs1",
+            "name": "dir1",
+            "rename": "dir2",
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_array = Mock()
+        mock_get.return_value = Mock(status_code=404)
+
+        with pytest.raises(SystemExit):
+            check_renamed_dir(mock_module, mock_array)
+
+        assert "not found to rename" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()
+
+
+class TestMainRenameIdempotency:
+    """Test that a rename task run twice changes once and then reports no change"""
+
+    @staticmethod
+    def _module(mock_ansible_module, rename="dir2"):
+        mock_module = Mock()
+        mock_module.params = {
+            "state": "present",
+            "filesystem": "fs1",
+            "name": "dir1",
+            "path": None,
+            "rename": rename,
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        return mock_module
+
+    @staticmethod
+    def _responses(dir_status):
+        fs_response = Mock(status_code=200)
+        fs_mock = Mock()
+        fs_mock.destroyed = False
+        fs_response.items = [fs_mock]
+        return [fs_response, Mock(status_code=dir_status)]
+
+    @patch("plugins.modules.purefa_directory.check_renamed_dir")
+    @patch("plugins.modules.purefa_directory.create_dir")
+    @patch("plugins.modules.purefa_directory.rename_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_rename_first_run_renames(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_rename_dir,
+        mock_create_dir,
+        mock_check_renamed_dir,
+    ):
+        """First run: the source is there, so the rename happens"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = Mock()
+        mock_get_array.return_value = mock_array
+        mock_get_with_context.side_effect = self._responses(200)
+
+        main()
+
+        mock_rename_dir.assert_called_once_with(mock_module, mock_array)
+        mock_create_dir.assert_not_called()
+        mock_check_renamed_dir.assert_not_called()
+
+    @patch("plugins.modules.purefa_directory.check_renamed_dir")
+    @patch("plugins.modules.purefa_directory.create_dir")
+    @patch("plugins.modules.purefa_directory.rename_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_rename_second_run_does_not_create(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_rename_dir,
+        mock_create_dir,
+        mock_check_renamed_dir,
+    ):
+        """Second run: the source has gone, and must not be created again"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = Mock()
+        mock_get_array.return_value = mock_array
+        mock_get_with_context.side_effect = self._responses(404)
+
+        main()
+
+        mock_check_renamed_dir.assert_called_once_with(mock_module, mock_array)
+        mock_create_dir.assert_not_called()
+        mock_rename_dir.assert_not_called()
+
+    @patch("plugins.modules.purefa_directory.check_renamed_dir")
+    @patch("plugins.modules.purefa_directory.create_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_creates_when_no_rename_requested(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_create_dir,
+        mock_check_renamed_dir,
+    ):
+        """A missing directory with no rename asked for is still created"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = self._module(mock_ansible_module, rename=None)
+        mock_array = Mock()
+        mock_get_array.return_value = mock_array
+        mock_get_with_context.side_effect = self._responses(404)
+
+        main()
+
+        mock_create_dir.assert_called_once_with(mock_module, mock_array)
+        mock_check_renamed_dir.assert_not_called()
+
+
+class TestMainDestroyedFilesystem:
+    """A destroyed file system must be reported, not silently ignored"""
+
+    @staticmethod
+    def _responses(dir_status):
+        fs_response = Mock(status_code=200)
+        fs_mock = Mock()
+        fs_mock.destroyed = True
+        fs_response.items = [fs_mock]
+        return [fs_response, Mock(status_code=dir_status)]
+
+    @patch("plugins.modules.purefa_directory.rename_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_rename_in_destroyed_filesystem_fails(
+        self, mock_ansible_module, mock_get_array, mock_get_with_context, mock_rename
+    ):
+        """Test a rename in a destroyed file system fails instead of no-oping"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "state": "present",
+            "filesystem": "fs1",
+            "name": "dir1",
+            "path": None,
+            "rename": "dir2",
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        mock_get_array.return_value = Mock()
+        mock_get_with_context.side_effect = self._responses(200)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert "is destroyed" in mock_module.fail_json.call_args[1]["msg"]
+        mock_rename.assert_not_called()
+
+    @patch("plugins.modules.purefa_directory.create_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_create_in_destroyed_filesystem_fails(
+        self, mock_ansible_module, mock_get_array, mock_get_with_context, mock_create
+    ):
+        """Test a create in a destroyed file system fails before the API call"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "state": "present",
+            "filesystem": "fs1",
+            "name": "dir1",
+            "path": None,
+            "rename": None,
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        mock_get_array.return_value = Mock()
+        mock_get_with_context.side_effect = self._responses(404)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert "is destroyed" in mock_module.fail_json.call_args[1]["msg"]
+        mock_create.assert_not_called()
+
+    @patch("plugins.modules.purefa_directory.delete_dir")
+    @patch("plugins.modules.purefa_directory.get_with_context")
+    @patch("plugins.modules.purefa_directory.get_array")
+    @patch("plugins.modules.purefa_directory.AnsibleModule")
+    def test_main_delete_in_destroyed_filesystem_still_works(
+        self, mock_ansible_module, mock_get_array, mock_get_with_context, mock_delete
+    ):
+        """Test the guard does not block removing a directory"""
+        from plugins.modules.purefa_directory import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "state": "absent",
+            "filesystem": "fs1",
+            "name": "dir1",
+            "path": None,
+            "rename": None,
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_get_array.return_value = mock_array
+        mock_get_with_context.side_effect = self._responses(200)
+
+        main()
+
+        mock_delete.assert_called_once_with(mock_module, mock_array)
+        mock_module.fail_json.assert_not_called()

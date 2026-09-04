@@ -324,8 +324,15 @@ class TestRenamePolicy:
 
     @patch("plugins.modules.purefa_policy.LooseVersion", side_effect=LooseVersion)
     @patch("plugins.modules.purefa_policy.PolicyPatch")
-    def test_rename_nfs_policy_check_mode(self, mock_policy_patch, mock_lv):
-        """Test rename_policy in check mode for NFS policy"""
+    @patch("plugins.modules.purefa_policy.patch_with_context")
+    def test_rename_nfs_policy_check_mode(
+        self, mock_patch_with_context, mock_policy_patch, mock_lv
+    ):
+        """Test rename_policy in check mode for NFS policy
+
+        Check mode has to predict the rename, so it reports changed while
+        leaving the array alone.
+        """
         mock_module = Mock()
         mock_module.params = {
             "name": "old_policy",
@@ -336,12 +343,11 @@ class TestRenamePolicy:
         mock_module.check_mode = True
         mock_array = Mock()
         mock_array.get_rest_version.return_value = "2.38"
-        # status_code == 200 means target name is available (can proceed)
-        mock_array.get_policies.return_value.status_code = 200
 
         rename_policy(mock_module, mock_array)
 
-        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.exit_json.assert_called_once_with(changed=True)
+        mock_patch_with_context.assert_not_called()
 
     @patch("plugins.modules.purefa_policy.LooseVersion", side_effect=LooseVersion)
     @patch("plugins.modules.purefa_policy.PolicyPatch")
@@ -4412,3 +4418,171 @@ class TestPasswordPolicyVersionGates:
 
         msgs = [c.kwargs.get("msg", "") for c in mock_module.fail_json.call_args_list]
         assert any("max_password_age" in m and "2.39" in m for m in msgs)
+
+
+class TestCheckRenamedPolicy:
+    """Test cases for check_renamed_policy function
+
+    This is the second run of a rename task, when the source policy has
+    already gone.
+    """
+
+    @patch("plugins.modules.purefa_policy.get_with_context")
+    def test_check_renamed_policy_already_renamed(self, mock_get):
+        """Test check_renamed_policy reports no change once the target is there"""
+        from plugins.modules.purefa_policy import check_renamed_policy
+
+        mock_module = Mock()
+        mock_module.params = {"name": "pol1", "rename": "pol2", "context": ""}
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = False
+        mock_get.return_value = Mock(status_code=200, items=[mock_target])
+
+        check_renamed_policy(mock_module, mock_array)
+
+        assert mock_get.call_args[1]["names"] == ["pol2"]
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_policy.get_with_context")
+    def test_check_renamed_policy_neither_exists_fails(self, mock_get):
+        """Test check_renamed_policy fails rather than creating the source"""
+        import pytest
+        from plugins.modules.purefa_policy import check_renamed_policy
+
+        mock_module = Mock()
+        mock_module.params = {"name": "pol1", "rename": "pol2", "context": ""}
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_array = Mock()
+        mock_get.return_value = Mock(status_code=404)
+
+        with pytest.raises(SystemExit):
+            check_renamed_policy(mock_module, mock_array)
+
+        assert "not found to rename" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_policy.get_with_context")
+    def test_check_renamed_policy_target_destroyed_fails(self, mock_get):
+        """Test check_renamed_policy fails when the target is in the trash"""
+        import pytest
+        from plugins.modules.purefa_policy import check_renamed_policy
+
+        mock_module = Mock()
+        mock_module.params = {"name": "pol1", "rename": "pol2", "context": ""}
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = True
+        mock_get.return_value = Mock(status_code=200, items=[mock_target])
+
+        with pytest.raises(SystemExit):
+            check_renamed_policy(mock_module, mock_array)
+
+        assert "destroyed state" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()
+
+
+class TestMainRenameIdempotency:
+    """Test that a rename task run twice changes once and then reports no change"""
+
+    @staticmethod
+    def _module(mock_ansible_module, rename="new_policy"):
+        mock_module = Mock()
+        mock_module.params = {
+            "state": "present",
+            "policy": "nfs",
+            "name": "old_policy",
+            "rename": rename,
+            "nfs_access": "root-squash",
+            "quota_notifications": None,
+            "min_password_age": None,
+            "max_password_age": None,
+            "lockout_duration": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        return mock_module
+
+    @staticmethod
+    def _array(mock_get_array, exists):
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.44"
+        mock_array.get_policies.return_value.status_code = 200 if exists else 404
+        mock_get_array.return_value = mock_array
+        return mock_array
+
+    @patch("plugins.modules.purefa_policy.check_renamed_policy")
+    @patch("plugins.modules.purefa_policy.create_policy")
+    @patch("plugins.modules.purefa_policy.rename_policy")
+    @patch("plugins.modules.purefa_policy.get_array")
+    @patch("plugins.modules.purefa_policy.AnsibleModule")
+    def test_main_rename_first_run_renames(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_rename_policy,
+        mock_create_policy,
+        mock_check_renamed_policy,
+    ):
+        """First run: the source is there, so the rename happens"""
+        from plugins.modules.purefa_policy import main
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = self._array(mock_get_array, exists=True)
+
+        main()
+
+        mock_rename_policy.assert_called_once_with(mock_module, mock_array)
+        mock_create_policy.assert_not_called()
+        mock_check_renamed_policy.assert_not_called()
+
+    @patch("plugins.modules.purefa_policy.check_renamed_policy")
+    @patch("plugins.modules.purefa_policy.create_policy")
+    @patch("plugins.modules.purefa_policy.rename_policy")
+    @patch("plugins.modules.purefa_policy.get_array")
+    @patch("plugins.modules.purefa_policy.AnsibleModule")
+    def test_main_rename_second_run_does_not_create(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_rename_policy,
+        mock_create_policy,
+        mock_check_renamed_policy,
+    ):
+        """Second run: the source has gone, and must not be created again"""
+        from plugins.modules.purefa_policy import main
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = self._array(mock_get_array, exists=False)
+
+        main()
+
+        mock_check_renamed_policy.assert_called_once_with(mock_module, mock_array)
+        mock_create_policy.assert_not_called()
+        mock_rename_policy.assert_not_called()
+
+    @patch("plugins.modules.purefa_policy.check_renamed_policy")
+    @patch("plugins.modules.purefa_policy.create_policy")
+    @patch("plugins.modules.purefa_policy.get_array")
+    @patch("plugins.modules.purefa_policy.AnsibleModule")
+    def test_main_creates_when_no_rename_requested(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_create_policy,
+        mock_check_renamed_policy,
+    ):
+        """A missing policy with no rename asked for is still created"""
+        from plugins.modules.purefa_policy import main
+
+        mock_module = self._module(mock_ansible_module, rename=None)
+        mock_array = self._array(mock_get_array, exists=False)
+
+        main()
+
+        assert mock_create_policy.call_args[0][:2] == (mock_module, mock_array)
+        mock_check_renamed_policy.assert_not_called()

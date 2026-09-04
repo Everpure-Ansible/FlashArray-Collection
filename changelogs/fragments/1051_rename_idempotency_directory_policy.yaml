@@ -1,0 +1,11 @@
+bugfixes:
+  - purefa_directory - Fix rename so that re-running a rename task reports no
+    change, instead of failing with a path collision or creating a duplicate
+    directory under the original name.
+  - purefa_directory - Report a failure when the parent file system is
+    destroyed, rather than silently reporting no change for a rename that the
+    array would refuse.
+  - purefa_policy - Fix rename so that re-running a rename task reports no
+    change, instead of recreating the policy under its original name.
+  - purefa_policy - Fix rename to report a change in check mode, rather than
+    always reporting no change.
