@@ -35,6 +35,7 @@ action_groups:
    - purefa_kmip
    - purefa_lds
    - purefa_localgroup
+   - purefa_localuser
    - purefa_logging
    - purefa_maintenance
    - purefa_messages

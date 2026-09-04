@@ -129,6 +129,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_inventory - get hardware inventory information from a FlashArray
 - purefa_lds - manage the Local Directory Services of the FlashArray
 - purefa_localgroup - manage local groups on the FlashArray
+- purefa_localuser - manage local users on the FlashArray
 - purefa_logging - get audit and session logs from a FlashArray
 - purefa_maintenance - manage FlashArray maintenance windows
 - purefa_messages - list FlashArray alert messages
