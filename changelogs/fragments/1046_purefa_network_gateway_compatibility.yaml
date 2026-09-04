@@ -1,0 +1,3 @@
+bugfixes:
+  - purefa_network - Fixed a compatible existing gateway being rejected with "Gateway and subnet are not compatible" when changing the address of an interface without also supplying a gateway
+  - purefa_network - Fixed ``AttributeError`` reading the MTU or the service list of an interface the array reports as null
