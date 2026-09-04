@@ -48,6 +48,8 @@ options:
   rename:
     description:
     - Value to rename the specified directory to
+    - Re-running a rename task reports no change, as long as the directory
+      is already known by the new name.
     type: str
   context:
     description:
@@ -129,6 +131,39 @@ def delete_dir(module, array):
     module.exit_json(changed=changed)
 
 
+def rename_target(module):
+    """Return the fully qualified name a rename would give the directory"""
+    return module.params["filesystem"] + ":" + module.params["rename"]
+
+
+def check_renamed_dir(module, array):
+    """Report on a rename whose source directory has already gone
+
+    A completed rename leaves nothing under the old name, so a second run of
+    the same task must not create the source again - that would leave the file
+    system holding both the renamed directory and a fresh empty one.
+    """
+    target_name = rename_target(module)
+    res = get_with_context(
+        array,
+        "get_directories",
+        CONTEXT_VERSION,
+        module,
+        names=[target_name],
+    )
+    if res.status_code != 200:
+        module.fail_json(
+            msg="Directory {0} not found to rename".format(
+                module.params["filesystem"] + ":" + module.params["name"]
+            )
+        )
+    if list(res.items)[0].destroyed:
+        module.fail_json(
+            msg="Directory {0} exists, but in destroyed state".format(target_name)
+        )
+    module.exit_json(changed=False)
+
+
 def rename_dir(module, array):
     """Rename a file system directory"""
     changed = False
@@ -137,14 +172,12 @@ def rename_dir(module, array):
         "get_directories",
         CONTEXT_VERSION,
         module,
-        names=[module.params["filesystem"] + ":" + module.params["rename"]],
+        names=[rename_target(module)],
     )
     if target.status_code != 200:
         changed = True
         if not module.check_mode:
-            directory = flasharray.DirectoryPatch(
-                name=module.params["filesystem"] + ":" + module.params["rename"]
-            )
+            directory = flasharray.DirectoryPatch(name=rename_target(module))
             res = patch_with_context(
                 array,
                 "patch_directories",
@@ -247,7 +280,9 @@ def main():
     )
     exists = bool(res.status_code == 200)
 
-    if state == "present" and not exists:
+    if state == "present" and not exists and module.params["rename"]:
+        check_renamed_dir(module, array)
+    elif state == "present" and not exists:
         create_dir(module, array)
     elif (
         state == "present"

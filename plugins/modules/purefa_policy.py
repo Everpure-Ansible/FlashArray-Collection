@@ -124,6 +124,8 @@ options:
   rename:
     description:
     - New name of policy
+    - Re-running a rename task reports no change, as long as the policy is
+      already known by the new name.
     type: str
   directory:
     description:
@@ -531,6 +533,25 @@ MAX_PASSWORD_AGE_VERSION = "2.39"
 CA_VERSION = "2.43"
 
 
+def check_renamed_policy(module, array):
+    """Report on a rename whose source policy has already gone
+
+    A completed rename leaves nothing under the old name, so a second run of
+    the same task must not create the source again - that would leave the
+    array holding both the renamed policy and a fresh empty one.
+    """
+    res = get_with_context(
+        array, "get_policies", CONTEXT_VERSION, module, names=[module.params["rename"]]
+    )
+    if res.status_code != 200:
+        module.fail_json(msg=f"Policy {module.params['name']} not found to rename")
+    if list(res.items)[0].destroyed:
+        module.fail_json(
+            msg=f"Policy {module.params['rename']} exists, but in destroyed state"
+        )
+    module.exit_json(changed=False)
+
+
 def rename_policy(module, array):
     """Rename a file system policy"""
     changed = False
@@ -543,8 +564,8 @@ def rename_policy(module, array):
         module.fail_json(
             msg=f"Rename failed - Target policy {module.params['rename']} already exists"
         )
+    changed = True
     if not module.check_mode:
-        changed = True
         policy_type = module.params["policy"]
         policy_patch = PolicyPatch(name=module.params["rename"])
 
@@ -2603,7 +2624,9 @@ def main():
     all_squash = ALL_SQUASH_VERSION in api_version
     exists = bool(array.get_policies(names=[module.params["name"]]).status_code == 200)
 
-    if state == "present" and not exists:
+    if state == "present" and not exists and module.params["rename"]:
+        check_renamed_policy(module, array)
+    elif state == "present" and not exists:
         create_policy(module, array, all_squash)
     elif state == "present" and exists and module.params["rename"]:
         rename_policy(module, array)
