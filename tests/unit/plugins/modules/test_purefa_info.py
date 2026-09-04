@@ -2262,3 +2262,213 @@ class TestGenerateSupportDict:
         out = generate_support_dict(array, "2.56")
 
         assert out["diagnostics"]["a check"]["severity"] == "info"
+
+
+class FakeModel:
+    """Stands in for an SDK model, including its habit of raising on null"""
+
+    def __init__(self, **fields):
+        self._values = fields
+        type(self).__fields__ = {k: None for k in fields}
+
+    def __getattr__(self, name):
+        values = self.__dict__.get("_values", {})
+        if name in values:
+            if values[name] is _NULL:
+                raise AttributeError(name)
+            return values[name]
+        raise AttributeError(name)
+
+
+_NULL = object()
+
+
+class TestPlain:
+    """Tests for _plain, which keeps SDK objects out of the module result"""
+
+    def test_primitives_pass_through(self):
+        from plugins.modules.purefa_info import _plain
+
+        for value in (None, True, 1, 1.5, "text"):
+            assert _plain(value) == value
+
+    def test_nested_model_becomes_a_dict(self):
+        """An SDK model cannot be serialised, so it has to be walked
+
+        This is what took the replication gather down twice: lag is an object,
+        and so is each of a pod's replication rates.
+        """
+        from plugins.modules.purefa_info import _plain
+
+        lag = FakeModel(avg=1500, max=1500)
+
+        assert _plain(lag) == {"avg": 1500, "max": 1500}
+
+    def test_reference_reduces_to_its_name(self):
+        from plugins.modules.purefa_info import _plain
+
+        assert _plain(FakeModel(id="abc", name="pod1")) == "pod1"
+
+    def test_null_field_does_not_raise(self):
+        from plugins.modules.purefa_info import _plain
+
+        assert _plain(FakeModel(avg=1, max=_NULL)) == {"avg": 1, "max": None}
+
+    def test_lists_are_walked(self):
+        from plugins.modules.purefa_info import _plain
+
+        out = _plain([FakeModel(id="a", name="one"), FakeModel(id="b", name="two")])
+
+        assert out == ["one", "two"]
+
+
+class TestDirectoryQuotas:
+    """Tests for add_directory_quotas"""
+
+    @staticmethod
+    def _files_info():
+        return {"fs1": {"directories": {"dir1": {}}}}
+
+    @staticmethod
+    def _array(**responses):
+        array = Mock()
+        empty = Mock(status_code=200, items=[])
+        for name in (
+            "get_directory_quotas",
+            "get_directory_user_quotas",
+            "get_directory_group_quotas",
+            "get_directories_users",
+            "get_directories_groups",
+        ):
+            getattr(array, name).return_value = responses.get(name, empty)
+        return array
+
+    def test_quota_lands_on_the_right_directory(self):
+        """A quota names its directory as filesystem colon directory"""
+        from plugins.modules.purefa_info import add_directory_quotas
+
+        quota = Mock()
+        quota.directory = Mock()
+        quota.directory.name = "fs1:dir1"
+        quota.quota_limit = 1024
+        quota.usage = 512
+        quota.policy = Mock()
+        quota.policy.name = "pol1"
+        files_info = self._files_info()
+
+        add_directory_quotas(
+            self._array(get_directory_quotas=Mock(status_code=200, items=[quota])),
+            files_info,
+            "2.56",
+        )
+
+        quotas = files_info["fs1"]["directories"]["dir1"]["quotas"]
+        assert len(quotas) == 1
+        assert quotas[0]["quota_limit"] == 1024
+        assert quotas[0]["policy"] == "pol1"
+
+    def test_a_quota_for_an_unreported_directory_is_dropped(self):
+        """Test a row that matches nothing does not invent a directory"""
+        from plugins.modules.purefa_info import add_directory_quotas
+
+        quota = Mock()
+        quota.directory = Mock()
+        quota.directory.name = "otherfs:otherdir"
+        files_info = self._files_info()
+
+        add_directory_quotas(
+            self._array(get_directory_quotas=Mock(status_code=200, items=[quota])),
+            files_info,
+            "2.56",
+        )
+
+        assert files_info == {"fs1": {"directories": {"dir1": {}}}}
+
+    def test_identity_views_skipped_on_an_older_array(self):
+        """The user and group views arrived in 2.44"""
+        from plugins.modules.purefa_info import add_directory_quotas
+
+        array = self._array()
+
+        add_directory_quotas(array, self._files_info(), "2.40")
+
+        array.get_directory_quotas.assert_called_once()
+        array.get_directory_user_quotas.assert_not_called()
+        array.get_directories_users.assert_not_called()
+
+
+class TestReplicationPerf:
+    """Tests for generate_replication_perf_dict"""
+
+    @staticmethod
+    def _array(**responses):
+        array = Mock()
+        empty = Mock(status_code=200, items=[])
+        for name in (
+            "get_pod_replica_links_lag",
+            "get_pod_replica_links_performance_replication",
+            "get_pods_performance_replication",
+            "get_protection_groups_performance_replication",
+            "get_remote_protection_group_snapshots_transfer",
+            "get_volume_snapshots_transfer",
+        ):
+            getattr(array, name).return_value = responses.get(name, empty)
+        return array
+
+    def test_lag_and_throughput_merge_on_the_same_link(self):
+        """Both come from separate endpoints keyed on the same link id"""
+        from plugins.modules.purefa_info import generate_replication_perf_dict
+
+        lag = Mock()
+        lag.id = "link-1"
+        lag.lag = FakeModel(avg=1500, max=1500)
+        throughput = Mock()
+        throughput.id = "link-1"
+        throughput.bytes_per_sec_total = 99
+
+        out = generate_replication_perf_dict(
+            self._array(
+                get_pod_replica_links_lag=Mock(status_code=200, items=[lag]),
+                get_pod_replica_links_performance_replication=Mock(
+                    status_code=200, items=[throughput]
+                ),
+            ),
+            "2.56",
+        )
+
+        link = out["pod_replica_links"]["link-1"]
+        assert link["lag"] == {"avg": 1500, "max": 1500}
+        assert link["bytes_per_sec_total"] == 99
+
+    def test_local_and_remote_transfers_are_distinguished(self):
+        from plugins.modules.purefa_info import generate_replication_perf_dict
+
+        remote, local = Mock(), Mock()
+        remote.name = "pgroup.snap"
+        local.name = "vol.snap"
+
+        out = generate_replication_perf_dict(
+            self._array(
+                get_remote_protection_group_snapshots_transfer=Mock(
+                    status_code=200, items=[remote]
+                ),
+                get_volume_snapshots_transfer=Mock(status_code=200, items=[local]),
+            ),
+            "2.56",
+        )
+
+        assert out["snapshot_transfers"]["pgroup.snap"]["remote"] is True
+        assert out["snapshot_transfers"]["vol.snap"]["remote"] is False
+
+    def test_a_failed_read_is_not_fatal(self):
+        from plugins.modules.purefa_info import generate_replication_perf_dict
+
+        array = self._array(
+            get_pod_replica_links_lag=Mock(status_code=400, items=[]),
+            get_pods_performance_replication=Mock(status_code=400, items=[]),
+        )
+
+        out = generate_replication_perf_dict(array, "2.56")
+
+        assert out["pod_replica_links"] == {}
+        assert out["pods"] == {}

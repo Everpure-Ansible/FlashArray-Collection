@@ -131,6 +131,13 @@ SOFTWARE_VERSIONS_API_VERSION = "2.9"
 SOFTWARE_PATCHES_API_VERSION = "2.17"
 SUPPORT_DIAGS_API_VERSION = "2.36"
 SUPPORT_MANIFEST_API_VERSION = "2.51"
+# Directory user and group quotas, and the directory identity views,
+# arrived together with the local users and groups they report on
+DIR_IDENTITY_API_VERSION = "2.44"
+# Replication throughput and lag, each on its own release
+REPL_LAG_API_VERSION = "2.2"
+PGROUP_REPL_PERF_API_VERSION = "2.1"
+SNAP_TRANSFER_API_VERSION = "2.0"
 
 
 def _is_cbs(array):
@@ -3416,6 +3423,218 @@ def generate_support_dict(array, api_version):
     return support_info
 
 
+def _plain(value):
+    """Reduce an SDK model to primitives
+
+    An SDK model cannot be serialised into a module result - exit_json rejects
+    it as a value of unknown type - and the replication endpoints nest them
+    several fields deep: a replica link's lag is an object of its own, and each
+    of a pod's replication rates is an object carrying to, from and total. So
+    anything that is not already a primitive is walked and turned into plain
+    dicts, lists and numbers. A reference is reduced to its name, which is what
+    the rest of this module reports for one.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    fields = getattr(type(value), "__fields__", None)
+    if not fields:
+        return str(value)
+    if set(fields) == {"id", "name"} or set(fields) == {"name"}:
+        return getattr(value, "name", None)
+    out = {}
+    for field in fields:
+        try:
+            out[field] = _plain(getattr(value, field))
+        except AttributeError:
+            # the model raises for anything the array returned as null
+            out[field] = None
+    return out
+
+
+def _directory_key(reference):
+    """The directory a quota or identity row belongs to
+
+    The reference names a directory as "<filesystem>:<directory>", which is how
+    the filesystems dict is nested, so both halves are handed back.
+    """
+    name = getattr(reference, "name", None)
+    if not name or ":" not in name:
+        return None, None
+    filesystem, directory = name.split(":", 1)
+    return filesystem, directory
+
+
+def add_directory_quotas(array, files_info, api_version):
+    """Add quota and identity detail to the directories already reported
+
+    Nothing here is reachable from the directory itself - each is a separate
+    listing keyed by a directory reference - so the rows are matched back onto
+    the filesystems dict rather than fetched per directory.
+    """
+
+    def slot(reference, key):
+        filesystem, directory = _directory_key(reference)
+        if not filesystem:
+            return None
+        entry = files_info.get(filesystem, {}).get("directories", {}).get(directory)
+        if entry is None:
+            return None
+        return entry.setdefault(key, [])
+
+    res = array.get_directory_quotas()
+    if res.status_code == 200:
+        for quota in list(res.items):
+            target = slot(getattr(quota, "directory", None), "quotas")
+            if target is None:
+                continue
+            target.append(
+                {
+                    "path": getattr(quota, "path", None),
+                    "quota_limit": getattr(quota, "quota_limit", None),
+                    "usage": getattr(quota, "usage", None),
+                    "percentage_used": getattr(quota, "percentage_used", None),
+                    "enabled": getattr(quota, "enabled", None),
+                    "enforced": getattr(quota, "enforced", None),
+                    "rule_name": getattr(quota, "rule_name", None),
+                    "policy": getattr(getattr(quota, "policy", None), "name", None),
+                }
+            )
+    if LooseVersion(DIR_IDENTITY_API_VERSION) > LooseVersion(api_version):
+        return
+    for getter, key, subject in (
+        (array.get_directory_user_quotas, "user_quotas", "user"),
+        (array.get_directory_group_quotas, "group_quotas", "group"),
+    ):
+        res = getter()
+        if res.status_code != 200:
+            continue
+        for quota in list(res.items):
+            target = slot(getattr(quota, "directory", None), key)
+            if target is None:
+                continue
+            target.append(
+                {
+                    subject: getattr(getattr(quota, subject, None), "name", None),
+                    "quota": getattr(quota, "quota", None),
+                    "usage": getattr(quota, "usage", None),
+                }
+            )
+    for getter, key in (
+        (array.get_directories_users, "users"),
+        (array.get_directories_groups, "groups"),
+    ):
+        res = getter()
+        if res.status_code != 200:
+            continue
+        for row in list(res.items):
+            target = slot(getattr(row, "directory", None), key)
+            if target is None:
+                continue
+            target.append(getattr(row, "name", None))
+
+
+def generate_replication_perf_dict(array, api_version):
+    """Return replication throughput and lag
+
+    purefa_info reports what is replicating but not how fast, or how far
+    behind. None of it is on the objects themselves - each is its own listing.
+    """
+    perf = {
+        "pod_replica_links": {},
+        "pods": {},
+        "protection_groups": {},
+        "snapshot_transfers": {},
+    }
+    if LooseVersion(REPL_LAG_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_pod_replica_links_lag()
+        if res.status_code == 200:
+            for link in list(res.items):
+                perf["pod_replica_links"][link.id] = {
+                    "local_pod": getattr(
+                        _plain(getattr(link, "local_pod", None)), "name", None
+                    ),
+                    "remote_pod": getattr(
+                        _plain(getattr(link, "remote_pod", None)), "name", None
+                    ),
+                    "direction": _plain(getattr(link, "direction", None)),
+                    "status": _plain(getattr(link, "status", None)),
+                    "lag": _plain(getattr(link, "lag", None)),
+                    "recovery_point": _plain(getattr(link, "recovery_point", None)),
+                }
+        res = array.get_pod_replica_links_performance_replication()
+        if res.status_code == 200:
+            for link in list(res.items):
+                entry = perf["pod_replica_links"].setdefault(link.id, {})
+                entry["bytes_per_sec_from_remote"] = getattr(
+                    link, "bytes_per_sec_from_remote", None
+                )
+                entry["bytes_per_sec_to_remote"] = getattr(
+                    link, "bytes_per_sec_to_remote", None
+                )
+                entry["bytes_per_sec_total"] = getattr(
+                    link, "bytes_per_sec_total", None
+                )
+        res = array.get_pods_performance_replication()
+        if res.status_code == 200:
+            for row in list(res.items):
+                pod = _plain(getattr(row, "pod", None))
+                if not pod:
+                    continue
+                # each of these is an object carrying to, from and total
+                perf["pods"][pod] = {
+                    field: _plain(getattr(row, field, None))
+                    for field in (
+                        "total_bytes_per_sec",
+                        "continuous_bytes_per_sec",
+                        "periodic_bytes_per_sec",
+                        "resync_bytes_per_sec",
+                        "sync_bytes_per_sec",
+                    )
+                }
+    if LooseVersion(PGROUP_REPL_PERF_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_protection_groups_performance_replication()
+        if res.status_code == 200:
+            for row in list(res.items):
+                if _plain(getattr(row, "name", None)):
+                    perf["protection_groups"][row.name] = {
+                        "bytes_per_sec": _plain(getattr(row, "bytes_per_sec", None)),
+                    }
+        res = array.get_remote_protection_group_snapshots_transfer()
+        if res.status_code == 200:
+            for snap in list(res.items):
+                if _plain(getattr(snap, "name", None)):
+                    perf["snapshot_transfers"][snap.name] = {
+                        "remote": True,
+                        "progress": _plain(getattr(snap, "progress", None)),
+                        "data_transferred": _plain(
+                            getattr(snap, "data_transferred", None)
+                        ),
+                        "completed": _plain(getattr(snap, "completed", None)),
+                    }
+    if LooseVersion(SNAP_TRANSFER_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_volume_snapshots_transfer()
+        if res.status_code == 200:
+            for snap in list(res.items):
+                if _plain(getattr(snap, "name", None)):
+                    perf["snapshot_transfers"][snap.name] = {
+                        "remote": False,
+                        "progress": _plain(getattr(snap, "progress", None)),
+                        "data_transferred": _plain(
+                            getattr(snap, "data_transferred", None)
+                        ),
+                        "physical_bytes_written": getattr(
+                            snap, "physical_bytes_written", None
+                        ),
+                        "completed": _plain(getattr(snap, "completed", None)),
+                        "started": _plain(getattr(snap, "started", None)),
+                    }
+    return perf
+
+
 def main():
     argument_spec = purefa_argument_spec()
     argument_spec.update(
@@ -3531,6 +3750,7 @@ def main():
         info["google_offload"] = generate_google_offload_dict(array)
     if "filesystems" in subset or "all" in subset:
         info["filesystems"] = generate_filesystems_dict(array, performance)
+        add_directory_quotas(array, info["filesystems"], api_version)
     if "policies" in subset or "all" in subset:
         user_map = bool(LooseVersion(NFS_USER_MAP_VERSION) <= LooseVersion(api_version))
         quota = bool(LooseVersion(DIR_QUOTA_API_VERSION) <= LooseVersion(api_version))
@@ -3567,6 +3787,10 @@ def main():
         "tgroups" in subset or "all" in subset
     ):
         info["tgroups"] = generate_tgroups_dict(array)
+    if "replication" in subset or "all" in subset:
+        info["replication_performance"] = generate_replication_perf_dict(
+            array, api_version
+        )
     if "software" in subset or "all" in subset:
         info["software"] = generate_software_dict(array, api_version)
     if "support" in subset or "all" in subset:
