@@ -101,6 +101,7 @@ plugins/modules/purefa_proxy.py import-2.7
 plugins/modules/purefa_ra.py import-2.7
 plugins/modules/purefa_realm.py import-2.7
 plugins/modules/purefa_saml.py import-2.7
+plugins/modules/purefa_server.py import-2.7
 plugins/modules/purefa_sessions.py import-2.7
 plugins/modules/purefa_smis.py import-2.7
 plugins/modules/purefa_smtp.py import-2.7

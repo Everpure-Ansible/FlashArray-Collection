@@ -1,0 +1,3 @@
+bugfixes:
+  - purefa_fs - Fix rename so that re-running a rename task reports no change,
+    instead of recreating the file system under its original name.

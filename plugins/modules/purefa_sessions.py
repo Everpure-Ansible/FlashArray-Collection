@@ -80,7 +80,7 @@ HAS_PYTZ = True
 try:
     import pytz
 except ImportError:
-    HAS_PYTX = False
+    HAS_PYTZ = False
 
 import datetime
 from ansible.module_utils.basic import AnsibleModule

@@ -145,6 +145,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_ra - manage the Remote Assist setting for the FlashArray
 - purefa_realm - manage the FlashArray realms
 - purefa_saml - manage FlashArray SAML2 service and identity providers
+- purefa_server - manage file servers on the FlashArray
 - purefa_sessions - get FlashArray sessions log
 - purefa_smis - manage SMI-S settings on the FlashArray
 - purefa_smtp - manage SMTP settings on the FlashArray

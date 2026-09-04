@@ -1,0 +1,4 @@
+bugfixes:
+  - purefa_smtp - Fixed the module always reporting ``changed`` when any SMTP setting is left unconfigured on the array
+  - purefa_smtp - Fixed ``encryption_mode`` not being cleared when set to an empty string
+  - purefa_smtp - Fixed ``state=absent`` always reporting ``changed`` even when the SMTP settings were already cleared

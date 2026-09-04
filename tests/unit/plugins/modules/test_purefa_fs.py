@@ -1,4 +1,4 @@
-# Copyright: (c) 2026, Pure Storage Ansible Team <pure-ansible-team@everpuredata.com>
+# Copyright: (c) 2026, Everpure Ansible Team <pure-ansible-team@everpuredata.com>
 # GNU General Public License v3.0+ (see COPYING.GPLv3 or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 """Unit tests for purefa_fs module."""
@@ -47,6 +47,8 @@ from plugins.modules.purefa_fs import (
     recover_fs,
     eradicate_fs,
     rename_fs,
+    rename_target,
+    check_renamed_fs,
     create_fs,
 )
 
@@ -1232,3 +1234,227 @@ class TestMain:
         purefa_fs_module.main()
 
         mock_module.exit_json.assert_called_once_with(changed=False)
+
+
+class TestRenameTarget:
+    """Test cases for rename_target function"""
+
+    def test_rename_target_local(self):
+        """Test rename_target returns the bare name outside a pod"""
+        mock_module = Mock()
+        mock_module.params = {"name": "old-fs", "rename": "new-fs"}
+
+        assert rename_target(mock_module) == "new-fs"
+
+    def test_rename_target_in_pod(self):
+        """Test rename_target keeps the pod prefix of the source"""
+        mock_module = Mock()
+        mock_module.params = {"name": "mypod::old-fs", "rename": "new-fs"}
+
+        assert rename_target(mock_module) == "mypod::new-fs"
+
+
+class TestCheckRenamedFs:
+    """Test cases for check_renamed_fs function
+
+    This is the second run of a rename task, when the source file system has
+    already gone.
+    """
+
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    def test_check_renamed_fs_already_renamed(self, mock_get_with_context):
+        """Test check_renamed_fs reports no change once the target is there"""
+        mock_module = Mock()
+        mock_module.params = {"name": "old-fs", "rename": "new-fs", "context": ""}
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = False
+        mock_get_with_context.return_value = Mock(status_code=200, items=[mock_target])
+
+        check_renamed_fs(mock_module, mock_array)
+
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    def test_check_renamed_fs_in_pod_already_renamed(self, mock_get_with_context):
+        """Test check_renamed_fs looks for the pod qualified target"""
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "mypod::old-fs",
+            "rename": "new-fs",
+            "context": "",
+        }
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = False
+        mock_get_with_context.return_value = Mock(status_code=200, items=[mock_target])
+
+        check_renamed_fs(mock_module, mock_array)
+
+        assert mock_get_with_context.call_args[1]["names"] == ["mypod::new-fs"]
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    def test_check_renamed_fs_neither_exists_fails(self, mock_get_with_context):
+        """Test check_renamed_fs fails rather than creating the source"""
+        import pytest
+
+        mock_module = Mock()
+        mock_module.params = {"name": "old-fs", "rename": "new-fs", "context": ""}
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_array = Mock()
+        mock_get_with_context.return_value = Mock(status_code=404)
+
+        with pytest.raises(SystemExit):
+            check_renamed_fs(mock_module, mock_array)
+
+        assert "not found to rename" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    def test_check_renamed_fs_target_destroyed_fails(self, mock_get_with_context):
+        """Test check_renamed_fs fails when the target is in the trash"""
+        import pytest
+
+        mock_module = Mock()
+        mock_module.params = {"name": "old-fs", "rename": "new-fs", "context": ""}
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_array = Mock()
+        mock_target = Mock()
+        mock_target.destroyed = True
+        mock_get_with_context.return_value = Mock(status_code=200, items=[mock_target])
+
+        with pytest.raises(SystemExit):
+            check_renamed_fs(mock_module, mock_array)
+
+        assert "destroyed state" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()
+
+
+class TestMainRenameIdempotency:
+    """Test that a rename task run twice changes once and then reports no change"""
+
+    @staticmethod
+    def _module(mock_ansible_module):
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "old-fs",
+            "state": "present",
+            "move": None,
+            "rename": "new-fs",
+            "eradicate": False,
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        return mock_module
+
+    @patch("plugins.modules.purefa_fs.LooseVersion")
+    @patch("plugins.modules.purefa_fs.check_renamed_fs")
+    @patch("plugins.modules.purefa_fs.create_fs")
+    @patch("plugins.modules.purefa_fs.rename_fs")
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    @patch("plugins.modules.purefa_fs.get_array")
+    @patch("plugins.modules.purefa_fs.AnsibleModule")
+    def test_main_rename_first_run_renames(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_rename_fs,
+        mock_create_fs,
+        mock_check_renamed_fs,
+        mock_loose_version,
+    ):
+        """First run: the source is there, so the rename happens"""
+        import plugins.modules.purefa_fs as purefa_fs_module
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.33"
+        mock_get_array.return_value = mock_array
+        mock_loose_version.side_effect = lambda v: Mock(
+            __gt__=lambda self, other: False
+        )
+
+        mock_fs = Mock()
+        mock_fs.destroyed = False
+        mock_get_with_context.return_value = Mock(status_code=200, items=[mock_fs])
+
+        purefa_fs_module.main()
+
+        mock_rename_fs.assert_called_once_with(mock_module, mock_array)
+        mock_create_fs.assert_not_called()
+        mock_check_renamed_fs.assert_not_called()
+
+    @patch("plugins.modules.purefa_fs.LooseVersion")
+    @patch("plugins.modules.purefa_fs.check_renamed_fs")
+    @patch("plugins.modules.purefa_fs.create_fs")
+    @patch("plugins.modules.purefa_fs.rename_fs")
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    @patch("plugins.modules.purefa_fs.get_array")
+    @patch("plugins.modules.purefa_fs.AnsibleModule")
+    def test_main_rename_second_run_does_not_create(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_rename_fs,
+        mock_create_fs,
+        mock_check_renamed_fs,
+        mock_loose_version,
+    ):
+        """Second run: the source has gone, and must not be created again"""
+        import plugins.modules.purefa_fs as purefa_fs_module
+
+        mock_module = self._module(mock_ansible_module)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.33"
+        mock_get_array.return_value = mock_array
+        mock_loose_version.side_effect = lambda v: Mock(
+            __gt__=lambda self, other: False
+        )
+
+        # Nothing under the old name any more
+        mock_get_with_context.return_value = Mock(status_code=404)
+
+        purefa_fs_module.main()
+
+        mock_check_renamed_fs.assert_called_once_with(mock_module, mock_array)
+        mock_create_fs.assert_not_called()
+        mock_rename_fs.assert_not_called()
+
+    @patch("plugins.modules.purefa_fs.LooseVersion")
+    @patch("plugins.modules.purefa_fs.check_renamed_fs")
+    @patch("plugins.modules.purefa_fs.create_fs")
+    @patch("plugins.modules.purefa_fs.get_with_context")
+    @patch("plugins.modules.purefa_fs.get_array")
+    @patch("plugins.modules.purefa_fs.AnsibleModule")
+    def test_main_creates_when_no_rename_requested(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_with_context,
+        mock_create_fs,
+        mock_check_renamed_fs,
+        mock_loose_version,
+    ):
+        """A missing file system with no rename asked for is still created"""
+        import plugins.modules.purefa_fs as purefa_fs_module
+
+        mock_module = self._module(mock_ansible_module)
+        mock_module.params["rename"] = None
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.33"
+        mock_get_array.return_value = mock_array
+        mock_loose_version.side_effect = lambda v: Mock(
+            __gt__=lambda self, other: False
+        )
+
+        mock_get_with_context.return_value = Mock(status_code=404)
+
+        purefa_fs_module.main()
+
+        mock_create_fs.assert_called_once_with(mock_module, mock_array)
+        mock_check_renamed_fs.assert_not_called()

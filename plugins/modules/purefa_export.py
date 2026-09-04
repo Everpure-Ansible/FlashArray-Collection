@@ -54,6 +54,15 @@ options:
     description:
     - Name of SMB Policy to apply to the export
     type: str
+  server:
+    description:
+    - Name of the file server the export belongs to, as managed by
+      M(everpure.flasharray.purefa_server).
+    - An export name is unique per file server, so this also identifies which
+      export is being managed when the same name is used on more than one.
+    - Requires Purity//FA REST API 2.44 or higher.
+    type: str
+    version_added: '1.45.0'
   context:
     description:
     - Name of fleet member on which to perform the operation.
@@ -86,6 +95,16 @@ EXAMPLES = r"""
     state: absent
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
+- name: Create an SMB export on file server filesvr1
+  everpure.flasharray.purefa_export:
+    name: export1
+    filesystem: bar
+    directory: foo
+    smb_policy: smb-example
+    server: filesvr1
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
 """
 
 RETURN = r"""
@@ -106,6 +125,7 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.version import
     LooseVersion,
 )
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
+    check_api_version,
     check_response,
     delete_with_context,
     get_with_context,
@@ -114,6 +134,35 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
 
 MIN_REQUIRED_API_VERSION = "2.3"
 CONTEXT_VERSION = "2.42"
+# Exports gained a file server of their own in this version
+SERVER_VERSION = "2.44"
+
+
+def _export_found(module, res):
+    """Whether an export lookup found the export being asked about
+
+    Without a server the array's status code is the whole answer, which is how
+    this module has always read these lookups. With one it is not enough: an
+    export name is unique per file server, so the same name can come back from
+    a different server than the one the task named. get_directory_exports has
+    no server filter, so the items are checked here instead.
+    """
+    if res.status_code != 200:
+        return False
+    if not module.params["server"]:
+        return True
+    return any(
+        getattr(getattr(export, "server", None), "name", None)
+        == module.params["server"]
+        for export in list(res.items)
+    )
+
+
+def _server_names(module):
+    """The server_names to scope a patch or delete with, if any"""
+    if module.params["server"]:
+        return {"server_names": [module.params["server"]]}
+    return {}
 
 
 def delete_export(module, array):
@@ -133,8 +182,7 @@ def delete_export(module, array):
             policy_names=[module.params["nfs_policy"]],
             directory_names=[directory],
         )
-        policy_exists = bool(res.status_code == 200)
-        if policy_exists:
+        if _export_found(module, res):
             all_policies.append(module.params["nfs_policy"])
     if module.params["smb_policy"]:
         res = get_with_context(
@@ -146,8 +194,7 @@ def delete_export(module, array):
             policy_names=[module.params["smb_policy"]],
             directory_names=[directory],
         )
-        policy_exists = bool(res.status_code == 200)
-        if policy_exists:
+        if _export_found(module, res):
             all_policies.append(module.params["smb_policy"])
     if all_policies:
         changed = True
@@ -159,6 +206,7 @@ def delete_export(module, array):
                 module,
                 export_names=[module.params["name"]],
                 policy_names=all_policies,
+                **_server_names(module),
             )
             check_response(
                 res,
@@ -193,7 +241,7 @@ def create_export(module, array):
             export_names=[module.params["name"]],
             policy_names=[module.params["nfs_policy"]],
         )
-        if bool(res.status_code != 200):
+        if not _export_found(module, res):
             all_policies.append(module.params["nfs_policy"])
     if module.params["smb_policy"]:
         res = get_with_context(
@@ -214,10 +262,17 @@ def create_export(module, array):
             export_names=[module.params["name"]],
             policy_names=[module.params["smb_policy"]],
         )
-        if bool(res.status_code != 200):
+        if not _export_found(module, res):
             all_policies.append(module.params["smb_policy"])
     if all_policies:
-        export = flasharray.DirectoryExportPost(export_name=module.params["name"])
+        export_settings = {"export_name": module.params["name"]}
+        if module.params["server"]:
+            # post_directory_exports takes the server in the body, unlike the
+            # patch and delete calls which scope it with server_names
+            export_settings["server"] = flasharray.Reference(
+                name=module.params["server"]
+            )
+        export = flasharray.DirectoryExportPost(**export_settings)
         changed = True
         if not module.check_mode:
             res = post_with_context(
@@ -250,6 +305,7 @@ def main():
             name=dict(type="str", required=True),
             nfs_policy=dict(type="str"),
             smb_policy=dict(type="str"),
+            server=dict(type="str"),
             context=dict(type="str", default=""),
         )
     )
@@ -269,6 +325,10 @@ def main():
             msg="FlashArray REST version not supported. "
             "Minimum version required: {0}".format(MIN_REQUIRED_API_VERSION)
         )
+    # Only gate on the file server version when a file server is actually
+    # named, so exports on arrays below 2.44 keep working as before
+    if module.params["server"]:
+        check_api_version(array, SERVER_VERSION, module, "Exports on a file server")
     state = module.params["state"]
 
     res = get_with_context(
@@ -278,7 +338,7 @@ def main():
         module,
         export_names=[module.params["name"]],
     )
-    exists = bool(res.status_code == 200)
+    exists = _export_found(module, res)
 
     if state == "present":
         create_export(module, array)
