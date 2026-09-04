@@ -49,6 +49,8 @@ sys.modules["ansible_collections.everpure.flasharray.plugins.module_utils.versio
 )
 
 from plugins.modules.purefa_export import (
+    _export_found,
+    _server_names,
     create_export,
     delete_export,
 )
@@ -65,6 +67,7 @@ class TestCreateExport:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -90,6 +93,7 @@ class TestDeleteExport:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -116,6 +120,7 @@ class TestDeleteExport:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -138,6 +143,7 @@ class TestDeleteExport:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = True
@@ -158,6 +164,7 @@ class TestDeleteExport:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -182,6 +189,7 @@ class TestDeleteExport:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": "smb_policy1",
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -212,6 +220,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -239,6 +248,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = True
@@ -266,6 +276,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -294,6 +305,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": "smb_policy1",
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -324,6 +336,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": "smb_policy1",
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -355,6 +368,7 @@ class TestCreateExportExtended:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": "smb_policy1",
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -387,6 +401,7 @@ class TestDeleteExportExtended:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": "smb_policy1",
+            "server": None,
             "context": "",
         }
         mock_module.check_mode = False
@@ -420,6 +435,7 @@ class TestMain:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_ansible.return_value = mock_module
@@ -455,6 +471,7 @@ class TestMain:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_ansible.return_value = mock_module
@@ -489,6 +506,7 @@ class TestMain:
             "directory": "dir1",
             "nfs_policy": "nfs_policy1",
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_ansible.return_value = mock_module
@@ -522,6 +540,7 @@ class TestMain:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.fail_json.side_effect = SystemExit(1)
@@ -542,6 +561,178 @@ class TestMain:
         finally:
             export_module.HAS_PURESTORAGE = original_has
 
+
+def _server_params(server="filesvr1", **overrides):
+    params = {
+        "state": "present",
+        "name": "export1",
+        "filesystem": "fs1",
+        "directory": "dir1",
+        "nfs_policy": None,
+        "smb_policy": "smb_policy1",
+        "server": server,
+        "context": "",
+    }
+    params.update(overrides)
+    return params
+
+
+def _export_on(server_name):
+    """An export record as the array reports it, belonging to a file server"""
+    export = Mock()
+    export.server = Mock()
+    export.server.name = server_name
+    return export
+
+
+class TestExportFound:
+    """How an export lookup is read, with and without a file server"""
+
+    def test_without_a_server_the_status_code_is_the_answer(self):
+        module = Mock()
+        module.params = _server_params(server=None)
+        assert _export_found(module, Mock(status_code=200)) is True
+        assert _export_found(module, Mock(status_code=400)) is False
+
+    def test_a_matching_server_is_found(self):
+        module = Mock()
+        module.params = _server_params()
+        res = Mock(status_code=200, items=[_export_on("filesvr1")])
+        assert _export_found(module, res) is True
+
+    def test_the_same_name_on_another_server_is_not_a_match(self):
+        """An export name is unique per server, not per array"""
+        module = Mock()
+        module.params = _server_params()
+        res = Mock(status_code=200, items=[_export_on("filesvr2")])
+        assert _export_found(module, res) is False
+
+    def test_an_export_outside_any_server_is_not_a_match(self):
+        """The array reports server as null for an export outside a server"""
+
+        class NoServer:
+            def __getattr__(self, name):
+                raise AttributeError(name)
+
+        module = Mock()
+        module.params = _server_params()
+        res = Mock(status_code=200, items=[NoServer()])
+        assert _export_found(module, res) is False
+
+    def test_a_failed_lookup_is_never_a_match(self):
+        module = Mock()
+        module.params = _server_params()
+        assert _export_found(module, Mock(status_code=400)) is False
+
+
+class TestServerNames:
+    """Scoping a patch or delete to a file server"""
+
+    def test_no_server_sends_no_scope(self):
+        module = Mock()
+        module.params = _server_params(server=None)
+        assert _server_names(module) == {}
+
+    def test_a_server_is_sent_as_server_names(self):
+        module = Mock()
+        module.params = _server_params()
+        assert _server_names(module) == {"server_names": ["filesvr1"]}
+
+
+class TestExportsOnAServer:
+    """Creating and deleting an export that belongs to a file server"""
+
+    @patch("plugins.modules.purefa_export.flasharray")
+    @patch("plugins.modules.purefa_export.check_response")
+    @patch("plugins.modules.purefa_export.post_with_context")
+    @patch("plugins.modules.purefa_export.get_with_context")
+    def test_create_sends_the_server_in_the_body(
+        self,
+        mock_get_with_context,
+        mock_post_with_context,
+        mock_check_response,
+        mock_flasharray,
+    ):
+        """post_directory_exports carries the server as a body reference"""
+        module = Mock()
+        module.check_mode = False
+        module.params = _server_params()
+        # The policy exists, and the export does not exist on this server
+        mock_get_with_context.side_effect = [
+            Mock(status_code=200),
+            Mock(status_code=200, items=[_export_on("filesvr2")]),
+        ]
+
+        create_export(module, Mock())
+
+        mock_flasharray.Reference.assert_called_once_with(name="filesvr1")
+        settings = mock_flasharray.DirectoryExportPost.call_args[1]
+        assert settings["export_name"] == "export1"
+        assert settings["server"] is mock_flasharray.Reference.return_value
+        module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_export.flasharray")
+    @patch("plugins.modules.purefa_export.check_response")
+    @patch("plugins.modules.purefa_export.post_with_context")
+    @patch("plugins.modules.purefa_export.get_with_context")
+    def test_create_without_a_server_sends_no_reference(
+        self,
+        mock_get_with_context,
+        mock_post_with_context,
+        mock_check_response,
+        mock_flasharray,
+    ):
+        module = Mock()
+        module.check_mode = False
+        module.params = _server_params(server=None)
+        mock_get_with_context.side_effect = [
+            Mock(status_code=200),
+            Mock(status_code=400),
+        ]
+
+        create_export(module, Mock())
+
+        mock_flasharray.Reference.assert_not_called()
+        assert "server" not in mock_flasharray.DirectoryExportPost.call_args[1]
+
+    @patch("plugins.modules.purefa_export.check_response")
+    @patch("plugins.modules.purefa_export.delete_with_context")
+    @patch("plugins.modules.purefa_export.get_with_context")
+    def test_delete_scopes_to_the_server(
+        self, mock_get_with_context, mock_delete_with_context, mock_check_response
+    ):
+        """delete_directory_exports is scoped with server_names"""
+        module = Mock()
+        module.check_mode = False
+        module.params = _server_params()
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[_export_on("filesvr1")]
+        )
+
+        delete_export(module, Mock())
+
+        assert mock_delete_with_context.call_args[1]["server_names"] == ["filesvr1"]
+        module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_export.check_response")
+    @patch("plugins.modules.purefa_export.delete_with_context")
+    @patch("plugins.modules.purefa_export.get_with_context")
+    def test_delete_leaves_another_servers_export_alone(
+        self, mock_get_with_context, mock_delete_with_context, mock_check_response
+    ):
+        """An export of the same name on another server is not this one"""
+        module = Mock()
+        module.check_mode = False
+        module.params = _server_params()
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[_export_on("filesvr2")]
+        )
+
+        delete_export(module, Mock())
+
+        mock_delete_with_context.assert_not_called()
+        module.exit_json.assert_called_once_with(changed=False)
+
     @patch("plugins.modules.purefa_export.AnsibleModule")
     @patch("plugins.modules.purefa_export.get_array")
     def test_main_api_version_too_low(self, mock_get_array, mock_ansible):
@@ -556,6 +747,7 @@ class TestMain:
             "directory": "dir1",
             "nfs_policy": None,
             "smb_policy": None,
+            "server": None,
             "context": "",
         }
         mock_module.fail_json.side_effect = SystemExit(1)

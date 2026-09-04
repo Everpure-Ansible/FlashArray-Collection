@@ -1,0 +1,2 @@
+minor_changes:
+  - purefa_export - Add ``server`` so an export can be created, found and deleted on a file server, as managed by the new ``purefa_server`` module. Requires REST API 2.44
