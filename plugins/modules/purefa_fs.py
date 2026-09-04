@@ -45,6 +45,8 @@ options:
     - Value to rename the specified file system to
     - Rename only applies to the container the current filesystem is in.
     - There is no requirement to specify the pod name as this is implied.
+    - Re-running a rename task reports no change, as long as the file system
+      is already known by the new name.
     type: str
   move:
     description:
@@ -188,14 +190,45 @@ def eradicate_fs(module, array):
     module.exit_json(changed=changed)
 
 
+def rename_target(module):
+    """Return the fully qualified name a rename would give the file system"""
+    if "::" in module.params["name"]:
+        pod_name = module.params["name"].split("::")[0]
+        return pod_name + "::" + module.params["rename"]
+    return module.params["rename"]
+
+
+def check_renamed_fs(module, array):
+    """Report on a rename whose source file system has already gone
+
+    A completed rename leaves nothing under the old name, so a second run of
+    the same task must not create the source again - that would leave the
+    array holding both the renamed file system and a fresh empty one.
+    """
+    target_name = rename_target(module)
+    res = get_with_context(
+        array,
+        "get_file_systems",
+        CONTEXT_VERSION,
+        module,
+        names=[target_name],
+    )
+    if res.status_code != 200:
+        module.fail_json(
+            msg="File system {0} not found to rename".format(module.params["name"])
+        )
+    if list(res.items)[0].destroyed:
+        module.fail_json(
+            msg="File system {0} exists, but in destroyed state".format(target_name)
+        )
+    module.exit_json(changed=False)
+
+
 def rename_fs(module, array):
     """Rename a file system"""
     changed = False
     target = None
-    target_name = module.params["rename"]
-    if "::" in module.params["name"]:
-        pod_name = module.params["name"].split("::")[0]
-        target_name = pod_name + "::" + module.params["rename"]
+    target_name = rename_target(module)
     res = get_with_context(
         array,
         "get_file_systems",
@@ -401,8 +434,15 @@ def main():
         filesystem = list(res.items)[0]
         exists = True
 
-    if state == "present" and not exists and not module.params["move"]:
+    if (
+        state == "present"
+        and not exists
+        and not module.params["move"]
+        and not module.params["rename"]
+    ):
         create_fs(module, array)
+    elif state == "present" and not exists and module.params["rename"]:
+        check_renamed_fs(module, array)
     elif (
         state == "present"
         and exists
