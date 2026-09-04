@@ -1,6 +1,9 @@
 minor_changes:
   - api_helpers - Add put_with_context, the verb alias the helper family was
     missing. PUT endpoints were previously reached through get_with_context.
+  - purefa_volume_tags - Warn that the module is superseded by
+    M(everpure.flasharray.purefa_tags), which manages volume tags as well as
+    tags on every other taggable resource.
 bugfixes:
   - purefa_volume_tags - Fix I(state=absent) so that it actually removes tags.
     The keys from I(kvp) were compared as single-element tuples against key

@@ -93,9 +93,9 @@ class TestResourceMap:
         assert len(versions) > 1
         assert "2.2" in versions and "2.44" in versions
 
-    def test_volumes_are_not_included(self):
-        """Volumes keep their own module, so they must not appear here"""
-        assert "volume" not in RESOURCES
+    def test_volumes_are_included(self):
+        """Volumes are covered here, superseding purefa_volume_tags"""
+        assert RESOURCES["volume"] == ("volumes", "2.2")
 
     def test_api_name_is_the_plural_api_form(self):
         assert _api_name(make_module(resource_type="host_group")) == "host_groups"
@@ -472,3 +472,32 @@ class TestMain:
         mod.main()
 
         assert mock_api.call_args[0][1] == "2.44"
+
+
+class TestVolumeSupport:
+    """Volumes came in to supersede purefa_volume_tags"""
+
+    def test_volume_uses_the_batch_put_like_the_others(self):
+        """Only the array is the odd one out, volumes are not"""
+        module = make_module(resource_type="volume", name="vol1")
+
+        assert _api_name(module) == "volumes"
+        assert _resource_args(module) == {"resource_names": ["vol1"]}
+
+    def test_copyable_is_compared_for_a_volume(self):
+        """copyable is honoured on volumes, so a difference is a change"""
+        module = make_module(resource_type="volume", name="vol1", copyable=False)
+
+        assert _compares_copyable(module) is True
+
+    @patch("plugins.modules.purefa_tags._write_tags")
+    def test_volume_copyable_difference_is_written(self, mock_write):
+        module = make_module(
+            resource_type="volume", name="vol1", kvp=["a:1"], copyable=False
+        )
+        array = Mock()
+
+        apply_tags(module, array, [make_tag("a", "1", copyable=True)])
+
+        mock_write.assert_called_once_with(module, array, [("a", "1")])
+        module.exit_json.assert_called_once_with(changed=True)

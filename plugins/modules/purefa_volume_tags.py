@@ -21,6 +21,10 @@ version_added: '1.0.0'
 short_description:  Manage volume tags on Everpure FlashArrays
 description:
 - Manage volume tags for volumes on Everpure FlashArray.
+- This module is superseded by M(everpure.flasharray.purefa_tags), which
+  manages tags on volumes and on every other taggable resource. Use that
+  module from now on. This one still works and will be deprecated in a future
+  release.
 - Requires a minimum of Purity 6.0.0
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
@@ -280,6 +284,13 @@ def main():
     )
 
     module = AnsibleModule(argument_spec, supports_check_mode=True)
+
+    module.warn(
+        "purefa_volume_tags is superseded by purefa_tags, which manages tags "
+        "on volumes and every other taggable resource. Use "
+        "purefa_tags with resource_type: volume from now on. This module still "
+        "works and will be deprecated in a future release."
+    )
 
     state = module.params["state"]
     array = get_array(module)

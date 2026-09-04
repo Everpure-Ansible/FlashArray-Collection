@@ -23,9 +23,9 @@ description:
 - Add, change and remove key/value tags on Everpure FlashArray resources.
 - One module covers every taggable resource type. Which type is being tagged is
   given by I(resource_type), and the resource itself by I(name).
-- Volumes are not included. They have their own module,
-  M(everpure.flasharray.purefa_volume_tags), which also exposes the volume-only
-  behaviour of I(copyable).
+- Volumes are covered here too. The older
+  M(everpure.flasharray.purefa_volume_tags) still works and is unchanged, but
+  this module supersedes it and is the one to use from now on.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -46,6 +46,7 @@ options:
     - protection_group
     - protection_group_snapshot
     - realm
+    - volume
     - volume_group
     - volume_snapshot
     - workload
@@ -83,8 +84,8 @@ options:
     - Whether the tag is inherited by copies of the resource.
     - Only the volume family honours this. The array accepts it for the other
       resource types and silently stores C(true) regardless, so it is only
-      compared, and only reported as a change, for C(volume_group) and
-      C(volume_snapshot).
+      compared, and only reported as a change, for C(volume),
+      C(volume_group) and C(volume_snapshot).
     - Omit it to let the array use its own default.
     type: bool
   state:
@@ -104,9 +105,10 @@ extends_documentation_fragment:
 - everpure.flasharray.everpure.fa
 notes:
 - The minimum Purity//FA REST version depends on I(resource_type)
-  - C(volume_snapshot) from 2.2, C(array), C(host) and C(host_group) from 2.34,
-  C(pod), C(protection_group) and C(volume_group) from 2.39, C(workload) from
-  2.40, C(realm) from 2.41 and C(protection_group_snapshot) from 2.44.
+  - C(volume) and C(volume_snapshot) from 2.2, C(array), C(host) and
+  C(host_group) from 2.34, C(pod), C(protection_group) and C(volume_group) from
+  2.39, C(workload) from 2.40, C(realm) from 2.41 and
+  C(protection_group_snapshot) from 2.44.
 - Tagging a resource that does not exist fails with the array's own message,
   which names the resource type.
 - Cloud provider tags, which propagate to the cloud a Cloud Block Store
@@ -150,6 +152,16 @@ EXAMPLES = r"""
     namespace: reporting
     kvp:
     - tier:gold
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
+- name: Tag a volume, replacing what purefa_volume_tags did
+  everpure.flasharray.purefa_tags:
+    resource_type: volume
+    name: foo
+    kvp:
+    - env:production
+    copyable: true
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
 
@@ -200,6 +212,7 @@ RESOURCES = {
     "protection_group": ("protection_groups", "2.39"),
     "protection_group_snapshot": ("protection_group_snapshots", "2.44"),
     "realm": ("realms", "2.41"),
+    "volume": ("volumes", "2.2"),
     "volume_group": ("volume_groups", "2.39"),
     "volume_snapshot": ("volume_snapshots", "2.2"),
     "workload": ("workloads", "2.40"),
@@ -212,7 +225,7 @@ SINGLETON = "array"
 # Only the volume family stores copyable as given. The others accept the field
 # and report true whatever was sent, so comparing it there would make a play
 # that sets copyable=false report a change on every run.
-COPYABLE_TYPES = ("volume_group", "volume_snapshot")
+COPYABLE_TYPES = ("volume", "volume_group", "volume_snapshot")
 
 
 def _api_name(module):
