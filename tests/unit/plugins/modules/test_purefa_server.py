@@ -34,6 +34,8 @@ sys.modules[
 ] = MagicMock()
 
 from plugins.modules.purefa_server import (
+    _attached_interfaces,
+    _reconcile_interfaces,
     _reference_name,
     _requested_references,
     create_server,
@@ -77,11 +79,25 @@ def _params(**overrides):
         "directory_service": None,
         "local_directory_service": None,
         "create_local_directory_service": None,
+        "network_interfaces": None,
         "cascade_delete": None,
         "context": "",
     }
     params.update(overrides)
     return params
+
+
+def _interface(name, attached_to=None):
+    """A network interface record as the array reports it"""
+    interface = Mock()
+    interface.name = name
+    if attached_to is None:
+        interface.attached_servers = []
+    else:
+        reference = Mock()
+        reference.name = attached_to
+        interface.attached_servers = [reference]
+    return interface
 
 
 class TestReferenceReads:
@@ -172,12 +188,58 @@ class TestCreateServer:
     def test_create_check_mode(self, mock_get_with_context, mock_check_response):
         module = Mock()
         module.check_mode = True
-        module.params = _params(dns="d1")
+        module.params = _params(create_local_directory_service="lds1")
 
         create_server(module, Mock())
 
         mock_get_with_context.assert_not_called()
         module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_create_needs_a_directory_service(
+        self, mock_get_with_context, mock_check_response
+    ):
+        """The array refuses a file server created from a name alone
+
+        Verified on Purity 6.10.6: POST /servers with only a name, or with a
+        DNS configuration and nothing else, is refused with "At least one of
+        the arguments is required".
+        """
+        module = Mock()
+        module.check_mode = False
+        module.params = _params(dns="d1")
+        module.fail_json.side_effect = SystemExit("fail_json called")
+
+        try:
+            create_server(module, Mock())
+        except SystemExit:
+            pass
+
+        module.fail_json.assert_called_once()
+        msg = module.fail_json.call_args[1]["msg"]
+        assert "requires one of" in msg
+        assert "create_local_directory_service" in msg
+        mock_get_with_context.assert_not_called()
+
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_create_guard_applies_in_check_mode_too(
+        self, mock_get_with_context, mock_check_response
+    ):
+        """Check mode predicts the array's refusal rather than reporting a change"""
+        module = Mock()
+        module.check_mode = True
+        module.params = _params()
+        module.fail_json.side_effect = SystemExit("fail_json called")
+
+        try:
+            create_server(module, Mock())
+        except SystemExit:
+            pass
+
+        module.fail_json.assert_called_once()
+        module.exit_json.assert_not_called()
 
 
 class TestUpdateServer:
@@ -343,6 +405,117 @@ class TestDeleteServer:
 
         mock_get_with_context.assert_not_called()
         module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestNetworkInterfaces:
+    """Attaching network interfaces to a file server
+
+    A network interface names the servers it is attached to, so the module
+    reads the interfaces and writes attached_servers on each one.
+    """
+
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_reads_the_interfaces_pointing_at_this_server(
+        self, mock_get_with_context, mock_check_response
+    ):
+        module = Mock()
+        module.params = _params()
+        mock_get_with_context.return_value = Mock(
+            status_code=200,
+            items=[
+                _interface("filevif2", attached_to="filesvr1"),
+                _interface("filevif1", attached_to="filesvr1"),
+                _interface("filevif3", attached_to="othersvr"),
+                _interface("ct0.eth0"),
+            ],
+        )
+
+        found = _attached_interfaces(module, Mock(), "filesvr1")
+
+        assert found == ["filevif1", "filevif2"]
+
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_omitting_the_option_touches_nothing(
+        self, mock_get_with_context, mock_check_response
+    ):
+        """A task that says nothing about networking must not detach anything"""
+        module = Mock()
+        module.check_mode = False
+        module.params = _params()
+
+        assert _reconcile_interfaces(module, Mock(), "filesvr1") is False
+        mock_get_with_context.assert_not_called()
+
+    @patch("plugins.modules.purefa_server.NetworkInterfacePatch")
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_attaches_what_is_missing(
+        self, mock_get_with_context, mock_check_response, mock_patch_model
+    ):
+        module = Mock()
+        module.check_mode = False
+        module.params = _params(network_interfaces=["filevif1", "filevif2"])
+        mock_get_with_context.side_effect = [
+            Mock(status_code=200, items=[_interface("filevif1", "filesvr1")]),
+            Mock(status_code=200),
+        ]
+
+        assert _reconcile_interfaces(module, Mock(), "filesvr1") is True
+
+        # Only the missing one is patched
+        patch_call = mock_get_with_context.call_args_list[1]
+        assert patch_call[0][1] == "patch_network_interfaces"
+        assert patch_call[1]["names"] == ["filevif2"]
+
+    @patch("plugins.modules.purefa_server.NetworkInterfacePatch")
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_detaches_what_is_no_longer_listed(
+        self, mock_get_with_context, mock_check_response, mock_patch_model
+    ):
+        module = Mock()
+        module.check_mode = False
+        module.params = _params(network_interfaces=[])
+        mock_get_with_context.side_effect = [
+            Mock(status_code=200, items=[_interface("filevif1", "filesvr1")]),
+            Mock(status_code=200),
+        ]
+
+        assert _reconcile_interfaces(module, Mock(), "filesvr1") is True
+
+        mock_patch_model.assert_called_once_with(attached_servers=[])
+
+    @patch("plugins.modules.purefa_server.NetworkInterfacePatch")
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_already_attached_is_no_change(
+        self, mock_get_with_context, mock_check_response, mock_patch_model
+    ):
+        module = Mock()
+        module.check_mode = False
+        module.params = _params(network_interfaces=["filevif1"])
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[_interface("filevif1", "filesvr1")]
+        )
+
+        assert _reconcile_interfaces(module, Mock(), "filesvr1") is False
+        mock_patch_model.assert_not_called()
+
+    @patch("plugins.modules.purefa_server.NetworkInterfacePatch")
+    @patch("plugins.modules.purefa_server.check_response")
+    @patch("plugins.modules.purefa_server.get_with_context")
+    def test_check_mode_reports_but_does_not_patch(
+        self, mock_get_with_context, mock_check_response, mock_patch_model
+    ):
+        module = Mock()
+        module.check_mode = True
+        module.params = _params(network_interfaces=["filevif1"])
+        mock_get_with_context.return_value = Mock(status_code=200, items=[])
+
+        assert _reconcile_interfaces(module, Mock(), "filesvr1") is True
+        mock_patch_model.assert_not_called()
 
 
 class TestMain:
