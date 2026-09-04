@@ -51,6 +51,7 @@ action_groups:
    - purefa_ra
    - purefa_realm
    - purefa_saml
+   - purefa_server
    - purefa_sessions
    - purefa_smis
    - purefa_smtp
