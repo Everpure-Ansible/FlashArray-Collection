@@ -134,6 +134,14 @@ def delete_with_context(client, method_name, context_version, module, **kwargs):
     return get_with_context(client, method_name, context_version, module, **kwargs)
 
 
+def put_with_context(client, method_name, context_version, module, **kwargs):
+    """Alias for get_with_context for PUT operations.
+
+    Identical to get_with_context but named for clarity when doing PUT operations.
+    """
+    return get_with_context(client, method_name, context_version, module, **kwargs)
+
+
 def post_with_throttle_and_context(
     client, method_name, throttle_version, context_version, module, **kwargs
 ):

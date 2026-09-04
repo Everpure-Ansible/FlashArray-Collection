@@ -65,6 +65,7 @@ action_groups:
    - purefa_subnet
    - purefa_syslog
    - purefa_syslog_settings
+   - purefa_tags
    - purefa_tgroup
    - purefa_timeout
    - purefa_token
