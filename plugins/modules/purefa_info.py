@@ -36,7 +36,7 @@ options:
         admins, volumes, snapshots, pods, replication, vgroups, offload, apps,
         arrays, certs, kmip, clients, policies, dir_snaps, filesystems,
         alerts, virtual_machines, subscriptions, realms, fleet, presets,
-        workloads and tgroups.
+        workloads, tgroups, software and support.
     type: list
     elements: str
     required: false
@@ -95,6 +95,7 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.version import
 )
 
 from datetime import datetime
+import json
 import time
 
 SEC_TO_DAY = 86400000
@@ -124,6 +125,19 @@ CONTEXT_API_VERSION = "2.38"
 QUOTA_API_VERSION = "2.42"
 TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
+# The support and software read endpoints each arrived separately
+SOFTWARE_STEPS_API_VERSION = "2.2"
+SOFTWARE_VERSIONS_API_VERSION = "2.9"
+SOFTWARE_PATCHES_API_VERSION = "2.17"
+SUPPORT_DIAGS_API_VERSION = "2.36"
+SUPPORT_MANIFEST_API_VERSION = "2.51"
+# Directory user and group quotas, and the directory identity views,
+# arrived together with the local users and groups they report on
+DIR_IDENTITY_API_VERSION = "2.44"
+# Replication throughput and lag, each on its own release
+REPL_LAG_API_VERSION = "2.2"
+PGROUP_REPL_PERF_API_VERSION = "2.1"
+SNAP_TRANSFER_API_VERSION = "2.0"
 
 
 def _is_cbs(array):
@@ -876,31 +890,37 @@ def generate_clients_dict(array):
 
 
 def generate_admin_dict(array):
+    """Return the array's administrators
+
+    Every field here is read through getattr, because the SDK models raise
+    AttributeError for anything the array returned as null rather than giving
+    back None. An admin with no public key - which is every admin by default -
+    used to take the whole gather down with it, and a remote user whose role
+    comes back as an empty reference did the same on role.name.
+    """
     admin_info = {}
     admins = list(array.get_admins().items)
     for admin in admins:
         admin_name = admin.name
         admin_info[admin_name] = {
-            "public_key": admin.public_key,
-            "local": admin.is_local,
-            "role": admin.role.name,
-            "locked": admin.locked,
+            "public_key": getattr(admin, "public_key", None),
+            "local": getattr(admin, "is_local", None),
+            "role": getattr(getattr(admin, "role", None), "name", None),
+            "locked": getattr(admin, "locked", None),
             "lockout_remaining": getattr(admin, "lockout_remaining", None),
         }
-        if hasattr(admin.api_token, "expires_at"):
-            if admin.api_token.expires_at:
-                admin_info[admin_name]["token_expires"] = datetime.fromtimestamp(
-                    admin.api_token.expires_at / 1000
+        token = getattr(admin, "api_token", None)
+        for field, key in (
+            ("expires_at", "token_expires"),
+            ("created_at", "token_created"),
+        ):
+            stamp = getattr(token, field, None)
+            if stamp:
+                admin_info[admin_name][key] = datetime.fromtimestamp(
+                    stamp / 1000
                 ).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            admin_info[admin_name]["token_expires"] = None
-        if hasattr(admin.api_token, "created_at"):
-            if admin.api_token.created_at:
-                admin_info[admin_name]["token_created"] = datetime.fromtimestamp(
-                    admin.api_token.created_at / 1000
-                ).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            admin_info[admin_name]["token_created"] = None
+            else:
+                admin_info[admin_name][key] = None
     return admin_info
 
 
@@ -3290,6 +3310,331 @@ def generate_realms_dict(array, performance):
     return realms_info
 
 
+def generate_software_dict(array, api_version):
+    """Return the software versions, patch catalogue and upgrade history
+
+    Each of the three endpoints arrived in a different release, so each is
+    guarded on its own rather than the newest of the three.
+    """
+    software_info = {"versions": {}, "patches": {}, "installation_steps": {}}
+    if LooseVersion(SOFTWARE_VERSIONS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_versions()
+        if res.status_code == 200:
+            for version in list(res.items):
+                software_info["versions"][version.name] = {
+                    "version": getattr(version, "version", None),
+                    "release_family": getattr(version, "release_family", None),
+                    "details": getattr(version, "details", None),
+                    "upgrade_hops": getattr(version, "upgrade_hops", None),
+                }
+    if LooseVersion(SOFTWARE_PATCHES_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_patches_catalog()
+        if res.status_code == 200:
+            for patch in list(res.items):
+                software_info["patches"][patch.name] = {
+                    "description": getattr(patch, "description", None),
+                    "details": getattr(patch, "details", None),
+                    "status": getattr(patch, "status", None),
+                    "progress": getattr(patch, "progress", None),
+                    "alert_code": getattr(patch, "alert_code", None),
+                    "ha_reduction_required": getattr(
+                        patch, "ha_reduction_required", None
+                    ),
+                }
+    if LooseVersion(SOFTWARE_STEPS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_software_installation_steps()
+        if res.status_code == 200:
+            for step in list(res.items):
+                # steps repeat their name across upgrades, so key on the id
+                software_info["installation_steps"][step.id] = {
+                    "name": getattr(step, "name", None),
+                    "description": getattr(step, "description", None),
+                    "details": getattr(step, "details", None),
+                    "status": getattr(step, "status", None),
+                    "hop_version": getattr(step, "hop_version", None),
+                    "installation": getattr(
+                        getattr(step, "installation", None), "name", None
+                    ),
+                    "start_time": getattr(step, "start_time", None),
+                    "end_time": getattr(step, "end_time", None),
+                    "checks": [
+                        {
+                            "name": getattr(check, "name", None),
+                            "details": getattr(check, "details", None),
+                        }
+                        for check in (getattr(step, "checks", None) or [])
+                    ],
+                }
+    return software_info
+
+
+def generate_support_dict(array, api_version):
+    """Return support diagnostics and a summary of the system manifest
+
+    The manifest comes back as a single JSON document of tens of kilobytes -
+    42KB on the array this was written against. Reporting it whole would weigh
+    down every gather that asks for everything, so the useful header fields are
+    pulled out and the bulk left behind.
+    """
+    support_info = {"diagnostics": {}, "manifest": {}}
+    if LooseVersion(SUPPORT_DIAGS_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_support_diagnostics_details()
+        if res.status_code == 200:
+            for diag in list(res.items):
+                support_info["diagnostics"][getattr(diag, "test_name", "unknown")] = {
+                    "test_type": getattr(diag, "test_type", None),
+                    "severity": getattr(diag, "severity", None),
+                    "result_details": getattr(diag, "result_details", None),
+                }
+    if LooseVersion(SUPPORT_MANIFEST_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_support_system_manifest()
+        if res.status_code == 200:
+            item = next(iter(list(res.items)), None)
+            raw = getattr(item, "system_manifest", None) if item else None
+            manifest = {}
+            if isinstance(raw, str):
+                try:
+                    manifest = json.loads(raw)
+                except ValueError:
+                    manifest = {}
+            elif isinstance(raw, dict):
+                manifest = raw
+            for field in (
+                "manifest_version",
+                "manifest_source",
+                "product_family",
+                "purity_version",
+                "array_name",
+                "appliance_id",
+                "domain",
+                "time_zone",
+                "timestamp",
+            ):
+                support_info["manifest"][field] = manifest.get(field)
+            support_info["manifest"]["licensed_features"] = manifest.get(
+                "licensed_features"
+            )
+            # the component inventory is the bulk of the document - report how
+            # much there is rather than all of it
+            components = manifest.get("components")
+            if isinstance(components, (list, dict)):
+                support_info["manifest"]["component_count"] = len(components)
+            support_info["manifest"]["raw_length"] = len(raw) if raw else 0
+    return support_info
+
+
+def _plain(value):
+    """Reduce an SDK model to primitives
+
+    An SDK model cannot be serialised into a module result - exit_json rejects
+    it as a value of unknown type - and the replication endpoints nest them
+    several fields deep: a replica link's lag is an object of its own, and each
+    of a pod's replication rates is an object carrying to, from and total. So
+    anything that is not already a primitive is walked and turned into plain
+    dicts, lists and numbers. A reference is reduced to its name, which is what
+    the rest of this module reports for one.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    fields = getattr(type(value), "__fields__", None)
+    if not fields:
+        return str(value)
+    if set(fields) == {"id", "name"} or set(fields) == {"name"}:
+        return getattr(value, "name", None)
+    out = {}
+    for field in fields:
+        try:
+            out[field] = _plain(getattr(value, field))
+        except AttributeError:
+            # the model raises for anything the array returned as null
+            out[field] = None
+    return out
+
+
+def _directory_key(reference):
+    """The directory a quota or identity row belongs to
+
+    The reference names a directory as "<filesystem>:<directory>", which is how
+    the filesystems dict is nested, so both halves are handed back.
+    """
+    name = getattr(reference, "name", None)
+    if not name or ":" not in name:
+        return None, None
+    filesystem, directory = name.split(":", 1)
+    return filesystem, directory
+
+
+def add_directory_quotas(array, files_info, api_version):
+    """Add quota and identity detail to the directories already reported
+
+    Nothing here is reachable from the directory itself - each is a separate
+    listing keyed by a directory reference - so the rows are matched back onto
+    the filesystems dict rather than fetched per directory.
+    """
+
+    def slot(reference, key):
+        filesystem, directory = _directory_key(reference)
+        if not filesystem:
+            return None
+        entry = files_info.get(filesystem, {}).get("directories", {}).get(directory)
+        if entry is None:
+            return None
+        return entry.setdefault(key, [])
+
+    res = array.get_directory_quotas()
+    if res.status_code == 200:
+        for quota in list(res.items):
+            target = slot(getattr(quota, "directory", None), "quotas")
+            if target is None:
+                continue
+            target.append(
+                {
+                    "path": getattr(quota, "path", None),
+                    "quota_limit": getattr(quota, "quota_limit", None),
+                    "usage": getattr(quota, "usage", None),
+                    "percentage_used": getattr(quota, "percentage_used", None),
+                    "enabled": getattr(quota, "enabled", None),
+                    "enforced": getattr(quota, "enforced", None),
+                    "rule_name": getattr(quota, "rule_name", None),
+                    "policy": getattr(getattr(quota, "policy", None), "name", None),
+                }
+            )
+    if LooseVersion(DIR_IDENTITY_API_VERSION) > LooseVersion(api_version):
+        return
+    for getter, key, subject in (
+        (array.get_directory_user_quotas, "user_quotas", "user"),
+        (array.get_directory_group_quotas, "group_quotas", "group"),
+    ):
+        res = getter()
+        if res.status_code != 200:
+            continue
+        for quota in list(res.items):
+            target = slot(getattr(quota, "directory", None), key)
+            if target is None:
+                continue
+            target.append(
+                {
+                    subject: getattr(getattr(quota, subject, None), "name", None),
+                    "quota": getattr(quota, "quota", None),
+                    "usage": getattr(quota, "usage", None),
+                }
+            )
+    for getter, key in (
+        (array.get_directories_users, "users"),
+        (array.get_directories_groups, "groups"),
+    ):
+        res = getter()
+        if res.status_code != 200:
+            continue
+        for row in list(res.items):
+            target = slot(getattr(row, "directory", None), key)
+            if target is None:
+                continue
+            target.append(getattr(row, "name", None))
+
+
+def generate_replication_perf_dict(array, api_version):
+    """Return replication throughput and lag
+
+    purefa_info reports what is replicating but not how fast, or how far
+    behind. None of it is on the objects themselves - each is its own listing.
+    """
+    perf = {
+        "pod_replica_links": {},
+        "pods": {},
+        "protection_groups": {},
+        "snapshot_transfers": {},
+    }
+    if LooseVersion(REPL_LAG_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_pod_replica_links_lag()
+        if res.status_code == 200:
+            for link in list(res.items):
+                perf["pod_replica_links"][link.id] = {
+                    "local_pod": getattr(
+                        _plain(getattr(link, "local_pod", None)), "name", None
+                    ),
+                    "remote_pod": getattr(
+                        _plain(getattr(link, "remote_pod", None)), "name", None
+                    ),
+                    "direction": _plain(getattr(link, "direction", None)),
+                    "status": _plain(getattr(link, "status", None)),
+                    "lag": _plain(getattr(link, "lag", None)),
+                    "recovery_point": _plain(getattr(link, "recovery_point", None)),
+                }
+        res = array.get_pod_replica_links_performance_replication()
+        if res.status_code == 200:
+            for link in list(res.items):
+                entry = perf["pod_replica_links"].setdefault(link.id, {})
+                entry["bytes_per_sec_from_remote"] = getattr(
+                    link, "bytes_per_sec_from_remote", None
+                )
+                entry["bytes_per_sec_to_remote"] = getattr(
+                    link, "bytes_per_sec_to_remote", None
+                )
+                entry["bytes_per_sec_total"] = getattr(
+                    link, "bytes_per_sec_total", None
+                )
+        res = array.get_pods_performance_replication()
+        if res.status_code == 200:
+            for row in list(res.items):
+                pod = _plain(getattr(row, "pod", None))
+                if not pod:
+                    continue
+                # each of these is an object carrying to, from and total
+                perf["pods"][pod] = {
+                    field: _plain(getattr(row, field, None))
+                    for field in (
+                        "total_bytes_per_sec",
+                        "continuous_bytes_per_sec",
+                        "periodic_bytes_per_sec",
+                        "resync_bytes_per_sec",
+                        "sync_bytes_per_sec",
+                    )
+                }
+    if LooseVersion(PGROUP_REPL_PERF_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_protection_groups_performance_replication()
+        if res.status_code == 200:
+            for row in list(res.items):
+                if _plain(getattr(row, "name", None)):
+                    perf["protection_groups"][row.name] = {
+                        "bytes_per_sec": _plain(getattr(row, "bytes_per_sec", None)),
+                    }
+        res = array.get_remote_protection_group_snapshots_transfer()
+        if res.status_code == 200:
+            for snap in list(res.items):
+                if _plain(getattr(snap, "name", None)):
+                    perf["snapshot_transfers"][snap.name] = {
+                        "remote": True,
+                        "progress": _plain(getattr(snap, "progress", None)),
+                        "data_transferred": _plain(
+                            getattr(snap, "data_transferred", None)
+                        ),
+                        "completed": _plain(getattr(snap, "completed", None)),
+                    }
+    if LooseVersion(SNAP_TRANSFER_API_VERSION) <= LooseVersion(api_version):
+        res = array.get_volume_snapshots_transfer()
+        if res.status_code == 200:
+            for snap in list(res.items):
+                if _plain(getattr(snap, "name", None)):
+                    perf["snapshot_transfers"][snap.name] = {
+                        "remote": False,
+                        "progress": _plain(getattr(snap, "progress", None)),
+                        "data_transferred": _plain(
+                            getattr(snap, "data_transferred", None)
+                        ),
+                        "physical_bytes_written": getattr(
+                            snap, "physical_bytes_written", None
+                        ),
+                        "completed": _plain(getattr(snap, "completed", None)),
+                        "started": _plain(getattr(snap, "started", None)),
+                    }
+    return perf
+
+
 def main():
     argument_spec = purefa_argument_spec()
     argument_spec.update(
@@ -3335,6 +3680,8 @@ def main():
         "presets",
         "workloads",
         "tgroups",
+        "software",
+        "support",
     )
     subset_test = (test in valid_subsets for test in subset)
     if not all(subset_test):
@@ -3403,6 +3750,7 @@ def main():
         info["google_offload"] = generate_google_offload_dict(array)
     if "filesystems" in subset or "all" in subset:
         info["filesystems"] = generate_filesystems_dict(array, performance)
+        add_directory_quotas(array, info["filesystems"], api_version)
     if "policies" in subset or "all" in subset:
         user_map = bool(LooseVersion(NFS_USER_MAP_VERSION) <= LooseVersion(api_version))
         quota = bool(LooseVersion(DIR_QUOTA_API_VERSION) <= LooseVersion(api_version))
@@ -3439,6 +3787,14 @@ def main():
         "tgroups" in subset or "all" in subset
     ):
         info["tgroups"] = generate_tgroups_dict(array)
+    if "replication" in subset or "all" in subset:
+        info["replication_performance"] = generate_replication_perf_dict(
+            array, api_version
+        )
+    if "software" in subset or "all" in subset:
+        info["software"] = generate_software_dict(array, api_version)
+    if "support" in subset or "all" in subset:
+        info["support"] = generate_support_dict(array, api_version)
     module.exit_json(changed=False, purefa_info=info)
 
 
