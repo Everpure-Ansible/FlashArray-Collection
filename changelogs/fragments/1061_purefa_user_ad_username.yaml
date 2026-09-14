@@ -1,0 +1,10 @@
+bugfixes:
+  - purefa_user - Fixed AD and LDAP usernames being rejected by the naming rules that only apply to
+    local accounts, so that directory users named in formats such as ``first.last`` can be given an
+    API token or SSH public key.
+  - purefa_user - Fixed check mode revoking and reissuing API tokens, and writing SSH public keys,
+    on both AD and existing local users. These writes now only happen outside check mode.
+  - purefa_user - Fixed ``public_key`` set to an empty string not clearing an AD user's SSH key,
+    which the documentation states it should.
+  - purefa_user - Fixed assigning an SSH public key to an AD user always reporting ``changed`` when
+    the key was already in place.

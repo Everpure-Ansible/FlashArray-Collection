@@ -236,14 +236,15 @@ def create_local_user(module, array, user):
                 )
         if module.params["api"]:
             api_changed = True
-            ttl = convert_time_to_millisecs(module.params["timeout"])
-            res = array.delete_admins_api_tokens(names=[module.params["name"]])
-            check_response(res, module, "Failed to delete original API token")
-            res = array.post_admins_api_tokens(
-                names=[module.params["name"]], timeout=ttl
-            )
-            check_response(res, module, "Failed to recreate API token")
-            api_token = list(res.items)[0].api_token.token
+            if not module.check_mode:
+                ttl = convert_time_to_millisecs(module.params["timeout"])
+                res = array.delete_admins_api_tokens(names=[module.params["name"]])
+                check_response(res, module, "Failed to delete original API token")
+                res = array.post_admins_api_tokens(
+                    names=[module.params["name"]], timeout=ttl
+                )
+                check_response(res, module, "Failed to recreate API token")
+                api_token = list(res.items)[0].api_token.token
         if module.params["role"] and module.params["role"] != getattr(
             user.role, "name", None
         ):
@@ -265,11 +266,12 @@ def create_local_user(module, array, user):
             "public_key"
         ] != getattr(user, "public_key", ""):
             key_changed = True
-            res = array.patch_admins(
-                names=[module.params["name"]],
-                admin=AdminPatch(public_key=module.params["public_key"]),
-            )
-            check_response(res, module, "Failed to change SSH key")
+            if not module.check_mode:
+                res = array.patch_admins(
+                    names=[module.params["name"]],
+                    admin=AdminPatch(public_key=module.params["public_key"]),
+                )
+                check_response(res, module, "Failed to change SSH key")
         changed = bool(passwd_changed or role_changed or api_changed or key_changed)
     module.exit_json(changed=changed, user_info=api_token)
 
@@ -279,31 +281,30 @@ def update_ad_user(module, array, user):
     api_token = "No API token created"
     api_changed = ssh_changed = False
     if module.params["api"]:
-        if user:
-            api_changed = True
+        api_changed = True
+        if not module.check_mode:
             ttl = convert_time_to_millisecs(module.params["timeout"])
-            res = array.delete_admins_api_tokens(names=[module.params["name"]])
-            check_response(res, module, "Failed to delete original API token")
-            res = array.post_admins_api_tokens(
-                names=[module.params["name"]], timeout=ttl
-            )
-            check_response(res, module, "Failed to recreate API token")
-            api_token = list(res.items)[0].api_token.token
-        else:
-            api_changed = True
-            ttl = convert_time_to_millisecs(module.params["timeout"])
+            if user:
+                res = array.delete_admins_api_tokens(names=[module.params["name"]])
+                check_response(res, module, "Failed to delete original API token")
             res = array.post_admins_api_tokens(
                 names=[module.params["name"]], timeout=ttl
             )
             check_response(res, module, "Failed to create API token")
             api_token = list(res.items)[0].api_token.token
-    if module.params["public_key"]:
-        ssh_changed = True
-        res = array.patch_admins(
-            names=[module.params["name"]],
-            admin=AdminPatch(public_key=module.params["public_key"]),
-        )
-        check_response(res, module, "Failed to add SSH key")
+    # An empty string clears the key, so this is checked against None rather
+    # than for truthiness. An AD user with no array-side state is not returned
+    # by get_admins, so there is no current key to compare against.
+    if module.params["public_key"] is not None:
+        current_key = getattr(user, "public_key", None) if user else None
+        if module.params["public_key"] != (current_key or ""):
+            ssh_changed = True
+            if not module.check_mode:
+                res = array.patch_admins(
+                    names=[module.params["name"]],
+                    admin=AdminPatch(public_key=module.params["public_key"]),
+                )
+                check_response(res, module, "Failed to add SSH key")
     changed = bool(api_changed or ssh_changed)
     module.exit_json(changed=changed, user_info=api_token)
 
@@ -371,12 +372,17 @@ def main():
 
     state = module.params["state"]
     array = get_array(module)
-    pattern = re.compile("^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
-    if not pattern.match(module.params["name"]):
-        module.fail_json(
-            msg="name must contain a minimum of 1 and a maximum of 32 characters "
-            "(alphanumeric or `-`). All letters must be lowercase."
-        )
+    # These are Purity's rules for the local account names the array itself
+    # creates. Directory service users are named by the directory, in formats
+    # such as first.last that the array accepts perfectly well, so the pattern
+    # must not be applied to them - see #1060.
+    if not module.params["ad_user"]:
+        pattern = re.compile("^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
+        if not pattern.match(module.params["name"]):
+            module.fail_json(
+                msg="name must contain a minimum of 1 and a maximum of 32 characters "
+                "(alphanumeric or `-`). All letters must be lowercase."
+            )
     user = get_user(module, array)
     local_user = getattr(user, "is_local", False)
     if state == "present" and not local_user and module.params["ad_user"]:

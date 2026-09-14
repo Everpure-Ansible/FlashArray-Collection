@@ -56,6 +56,7 @@ from plugins.modules.purefa_user import (
     delete_local_user,
     delete_ad_user,
     update_ad_user,
+    main,
 )
 
 
@@ -246,6 +247,7 @@ class TestUpdateAdUser:
         """Test update_ad_user creates API token for new user"""
         mock_convert_time.return_value = 3600000  # 1 hour in milliseconds
         mock_module = Mock()
+        mock_module.check_mode = False
         mock_module.params = {
             "name": "ad-user",
             "api": True,
@@ -279,6 +281,7 @@ class TestUpdateAdUser:
         """Test update_ad_user refreshes API token for existing user"""
         mock_convert_time.return_value = 3600000
         mock_module = Mock()
+        mock_module.check_mode = False
         mock_module.params = {
             "name": "ad-user",
             "api": True,
@@ -308,6 +311,7 @@ class TestUpdateAdUser:
     def test_update_ad_user_add_public_key(self, mock_check_response):
         """Test update_ad_user adds SSH public key"""
         mock_module = Mock()
+        mock_module.check_mode = False
         mock_module.params = {
             "name": "ad-user",
             "api": False,
@@ -458,3 +462,237 @@ class TestCreateLocalUserExtended:
         mock_module.exit_json.assert_called_once()
         call_kwargs = mock_module.exit_json.call_args[1]
         assert call_kwargs["changed"] is False
+
+
+class TestAdUserNameValidation:
+    """Regression tests for issue #1060 - AD usernames rejected by local rules"""
+
+    def _module(self, name, ad_user):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.params = {
+            "name": name,
+            "ad_user": ad_user,
+            "state": "present",
+            "role": "readonly",
+            "password": None,
+            "old_password": None,
+            "api": False,
+            "timeout": "0",
+            "public_key": None,
+        }
+        return mock_module
+
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_ad_username_with_dot_is_accepted(
+        self, mock_ansible_module, mock_get_array
+    ):
+        """An LDAP first.last name must not be rejected by the local rules"""
+        import pytest
+
+        mock_module = self._module("meagan.gibbons", ad_user=True)
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        # An AD user with no array-side state is not returned by get_admins
+        mock_array.get_admins.return_value = Mock(status_code=400)
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_local_username_with_dot_is_still_rejected(
+        self, mock_ansible_module, mock_get_array
+    ):
+        """The local account rules still apply to local users"""
+        import pytest
+
+        mock_module = self._module("meagan.gibbons", ad_user=False)
+        mock_ansible_module.return_value = mock_module
+        mock_get_array.return_value = Mock()
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once()
+        assert "lowercase" in mock_module.fail_json.call_args[1]["msg"]
+
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_local_username_uppercase_is_still_rejected(
+        self, mock_ansible_module, mock_get_array
+    ):
+        """Uppercase local names are still rejected"""
+        import pytest
+
+        mock_module = self._module("Ansible", ad_user=False)
+        mock_ansible_module.return_value = mock_module
+        mock_get_array.return_value = Mock()
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once()
+
+
+class TestUpdateAdUserCheckMode:
+    """Check mode must not write - issue #1060 review"""
+
+    @patch("plugins.modules.purefa_user.check_response")
+    @patch("plugins.modules.purefa_user.convert_time_to_millisecs")
+    def test_api_token_not_recreated_in_check_mode(
+        self, mock_convert_time, mock_check_response
+    ):
+        """Check mode must not revoke and reissue a live API token"""
+        mock_convert_time.return_value = 3600000
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = {
+            "name": "ad-user",
+            "api": True,
+            "timeout": "1h",
+            "public_key": None,
+        }
+        mock_array = Mock()
+
+        update_ad_user(mock_module, mock_array, user=Mock())
+
+        mock_array.delete_admins_api_tokens.assert_not_called()
+        mock_array.post_admins_api_tokens.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_public_key_not_written_in_check_mode(self, mock_check_response):
+        """Check mode must not write an SSH key"""
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = {
+            "name": "ad-user",
+            "api": False,
+            "public_key": "ssh-ed25519 AAAAC3...",
+        }
+        mock_array = Mock()
+
+        update_ad_user(mock_module, mock_array, user=None)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+
+class TestCreateLocalUserCheckMode:
+    """Check mode must not write on the update paths - issue #1060 review"""
+
+    def _existing_user_module(self, **overrides):
+        mock_module = Mock()
+        mock_module.check_mode = True
+        params = {
+            "name": "ansible",
+            "role": "readonly",
+            "password": None,
+            "old_password": None,
+            "api": False,
+            "timeout": "0",
+            "public_key": None,
+        }
+        params.update(overrides)
+        mock_module.params = params
+        return mock_module
+
+    @patch("plugins.modules.purefa_user.check_response")
+    @patch("plugins.modules.purefa_user.convert_time_to_millisecs")
+    def test_api_token_not_recreated_in_check_mode(
+        self, mock_convert_time, mock_check_response
+    ):
+        """Check mode must not revoke and reissue an existing user's token"""
+        mock_convert_time.return_value = 0
+        mock_module = self._existing_user_module(api=True)
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = "readonly"
+
+        create_local_user(mock_module, mock_array, user=mock_user)
+
+        mock_array.delete_admins_api_tokens.assert_not_called()
+        mock_array.post_admins_api_tokens.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_public_key_not_written_in_check_mode(self, mock_check_response):
+        """Check mode must not overwrite an existing user's SSH key"""
+        mock_module = self._existing_user_module(public_key="ssh-ed25519 AAAAC3...")
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = "readonly"
+        mock_user.public_key = "ssh-rsa OLDKEY"
+
+        create_local_user(mock_module, mock_array, user=mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+
+class TestAdUserPublicKey:
+    """Public key handling for AD users - issue #1060 review"""
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_empty_public_key_clears_existing_key(self, mock_check_response):
+        """An empty string clears the key, as the documentation states"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "ad-user",
+            "api": False,
+            "public_key": "",
+        }
+        mock_array = Mock()
+        mock_array.patch_admins.return_value = Mock(status_code=200)
+        mock_user = Mock()
+        mock_user.public_key = "ssh-rsa EXISTINGKEY"
+
+        update_ad_user(mock_module, mock_array, user=mock_user)
+
+        mock_array.patch_admins.assert_called_once()
+        assert mock_array.patch_admins.call_args[1]["names"] == ["ad-user"]
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    def test_matching_public_key_reports_no_change(self):
+        """Re-running with the key already in place reports no change"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "ad-user",
+            "api": False,
+            "public_key": "ssh-ed25519 AAAAC3...",
+        }
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.public_key = "ssh-ed25519 AAAAC3..."
+
+        update_ad_user(mock_module, mock_array, user=mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    def test_empty_public_key_on_unprovisioned_user_is_no_change(self):
+        """Clearing a key on a user with no array-side state changes nothing"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "ad-user",
+            "api": False,
+            "public_key": "",
+        }
+        mock_array = Mock()
+
+        update_ad_user(mock_module, mock_array, user=None)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
