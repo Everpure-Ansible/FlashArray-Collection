@@ -42,3 +42,15 @@ build_ignore:
   - .gitignore
   - .git-blame-ignore-revs
   - .yamllint
+  # changelogs/changelog.yaml ships deliberately, alongside the rendered
+  # CHANGELOG.rst. These two do not: .plugin-cache.yaml is antsibull-changelog
+  # tooling state, and fragments are unreleased notes by definition.
+  - changelogs/.plugin-cache.yaml
+  - changelogs/config.yaml
+  - changelogs/fragments
+  # Empty scaffolding kept in git only so the directories exist. Excluding the
+  # placeholders leaves the directories empty, so they are not archived at all.
+  - "**/.keep"
+  # tests/unit is excluded above, and tests/README.md documents it in detail -
+  # per-module coverage tables and pytest paths that do not exist in the build
+  - tests/README.md

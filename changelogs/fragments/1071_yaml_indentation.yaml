@@ -1,6 +1,0 @@
-bugfixes:
-  - collection - Fixed the YAML indentation that ansible-lint reports on the built collection.
-    These were suppressed while .yamllint shipped inside the tarball; it is development tooling and
-    no longer ships, so the sequences in meta/runtime.yml and nine module documentation blocks are
-    indented conformantly instead. A documentation formatting change only - every DOCUMENTATION,
-    EXAMPLES and RETURN block parses to exactly the same content as before.

@@ -1,9 +1,9 @@
-<a href="https://github.com/Everpure-Ansible/FlashArray-Collection/releases/latest"><img src="https://img.shields.io/github/v/tag/Everpure-Ansible/FlashArray-Collection?label=release">
-<a href="https://github.com/Everpure-Ansible/FlashArray-Collection/blob/master/COPYING.GPLv3"><img src="https://img.shields.io/badge/license-GPL%20v3.0-brightgreen.svg"></a>
-<img src="https://cla-assistant.io/readme/badge/Everpure-Ansible/FlashArray-Collection">
-<img src="https://github.com/Everpure-Ansible/FlashArray-Collection/workflows/Everpure%20Ansible%20CI/badge.svg">
-<a href="https://github.com/psf/black"><img src="https://img.shields.io/badge/code%20style-black-000000.svg"></a>
-<img src="https://img.shields.io/badge/tests-passing-brightgreen.svg"></a>
+[![Release](https://img.shields.io/github/v/tag/Everpure-Ansible/FlashArray-Collection?label=release)](https://github.com/Everpure-Ansible/FlashArray-Collection/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL%20v3.0-brightgreen.svg)](https://github.com/Everpure-Ansible/FlashArray-Collection/blob/master/COPYING.GPLv3)
+[![CLA assistant](https://cla-assistant.io/readme/badge/Everpure-Ansible/FlashArray-Collection)](https://cla-assistant.io/Everpure-Ansible/FlashArray-Collection)
+[![Everpure Ansible CI](https://github.com/Everpure-Ansible/FlashArray-Collection/workflows/Everpure%20Ansible%20CI/badge.svg)](https://github.com/Everpure-Ansible/FlashArray-Collection/actions)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/Everpure-Ansible/FlashArray-Collection/actions)
 
 # Everpure FlashArray Collection
 
@@ -115,7 +115,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_alert - manage email alert settings on the FlashArray
 - purefa_apiclient - manage FlashArray API clients
 - purefa_arrayname - manage the name of the FlashArray
-- pureaf_audits - get FlashArray audit events
+- purefa_audits - get FlashArray audit events
 - purefa_banner - manage the CLI and GUI login banner of the FlashArray
 - purefa_cbsexpand - manage CBS FlashArray capacity expansion
 - purefa_certs - manage FlashArray SSL certificates
@@ -127,6 +127,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_dns - manage the DNS settings of the FlashArray
 - purefa_ds - manage the Directory Services of the FlashArray
 - purefa_dsrole - manage the Directory Service Roles of the FlashArray
+- purefa_dsrole_old - manage the Directory Service Roles of the FlashArray for Purity//FA 6.6.3 and lower
 - purefa_endpoint - manage VMware protocol-endpoints on the FlashArray
 - purefa_eradication - manage eradication timer for deleted items
 - purefa_eula - sign, or resign, FlashArray EULA
@@ -139,6 +140,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_host - manage hosts on the FlashArray
 - purefa_info - get information regarding the configuration of the Flasharray
 - purefa_inventory - get hardware inventory information from a FlashArray
+- purefa_kmip - manage FlashArray KMIP server objects
 - purefa_lds - manage the Local Directory Services of the FlashArray
 - purefa_localgroup - manage local groups on the FlashArray
 - purefa_localuser - manage local users on the FlashArray
@@ -173,8 +175,8 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_syslog_settings - manage the global syslog server settings on the FlashArray
 - purefa_tags - manage tags on FlashArray resources
 - purefa_tgroup - manage topology groups and their memberships on the FlashArray
-- purefa_token - manage FlashArray user API tokens
 - purefa_timeout - manage the GUI idle timeout on the FlashArray
+- purefa_token - manage FlashArray user API tokens
 - purefa_user - manage local user accounts on the FlashArray
 - purefa_vg - manage volume groups on the FlashArray
 - purefa_vlan - manage VLAN interfaces on the FlashArray
