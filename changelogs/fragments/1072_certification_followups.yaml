@@ -1,0 +1,15 @@
+minor_changes:
+  - collection - Removed the playbooks/roles symlink and stopped shipping the empty scaffolding
+    directories. A symlink is recorded in FILES.json as an ordinary directory with a null
+    checksum, so nothing behind it is verified, and content scanners routinely skip symlinks.
+  - collection - Narrowed the changelogs exclusion so that changelogs/changelog.yaml still
+    ships alongside the rendered CHANGELOG.rst while antsibull-changelog tooling state, its
+    configuration, and unreleased fragments do not.
+  - collection - tests/README.md no longer ships. It documents the tests/unit directory,
+    which is excluded from the build, so none of the paths it describes exist in the collection.
+  - README - Converted the badge block from unbalanced raw HTML to markdown image links, and
+    reconciled the Available Modules list against the collection - it listed 73 of 75 modules,
+    misspelled purefa_audits, and omitted purefa_dsrole_old and purefa_kmip.
+  - CI - The artifact job now fails on any symlink in the build, on unreleased fragments or test
+    directories being shipped, and when CHANGELOG.rst has no section for the version in
+    galaxy.yml. It also runs ansible-lint against the artifact, not only ansible-test sanity.

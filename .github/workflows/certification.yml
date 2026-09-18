@@ -64,17 +64,58 @@ jobs:
           tar xzf /tmp/build/*.tar.gz \
             -C /tmp/tree/ansible_collections/everpure/flasharray
 
-      - name: Fail if a release archive or repo-only dotfile was shipped
+      - name: Fail if non user-facing files were shipped
         run: |
           cd /tmp/tree/ansible_collections/everpure/flasharray
-          if ls *.tar.gz *.tgz *.zip .gitignore .git-blame-ignore-revs 2>/dev/null; then
+          if ls *.tar.gz *.tgz *.zip .gitignore .git-blame-ignore-revs \
+                .yamllint settings.json 2>/dev/null; then
             echo "::error::Non user-facing files were included in the build."
             echo "Add them to build_ignore in galaxy.yml."
             exit 1
           fi
-          echo "No archives or repo-only dotfiles in the artifact."
+          for path in .github changelogs/fragments tests/unit; do
+            if [ -e "$path" ]; then
+              echo "::error::$path was included in the build."
+              exit 1
+            fi
+          done
+          # A symlink in the artifact is recorded in FILES.json as a plain
+          # directory with a null checksum, so nothing behind it is verified,
+          # and scanners routinely skip symlinks.
+          if [ -n "$(find . -type l)" ]; then
+            echo "::error::The artifact contains symlinks:"
+            find . -type l
+            exit 1
+          fi
+          echo "Artifact contains only user-facing content."
+
+      # everpure.flasharray 1.45.1 shipped with a merged fragment that had
+      # never been rendered, so a change present in the artifact was missing
+      # from the release notes. galaxy.yml and CHANGELOG.rst must agree.
+      - name: Fail if the changelog has no entry for this version
+        run: |
+          cd /tmp/tree/ansible_collections/everpure/flasharray
+          # galaxy.yml is not in the artifact - ansible-galaxy replaces it with
+          # MANIFEST.json, which carries the version under collection_info.
+          version="$(python -c 'import json;print(json.load(open("MANIFEST.json"))["collection_info"]["version"])')"
+          if ! grep -q "^v${version}$" CHANGELOG.rst; then
+            echo "::error::CHANGELOG.rst has no v${version} section."
+            echo "Run 'antsibull-changelog release' before tagging."
+            exit 1
+          fi
+          echo "CHANGELOG.rst documents v${version}."
 
       - name: Run sanity against the artifact
         run: |
           cd /tmp/tree/ansible_collections/everpure/flasharray
           ansible-test sanity --python 3.11
+
+      # ansible-lint reads the collection's own config, so excluding a lint
+      # config from the build changes what the artifact is judged against.
+      # This is what surfaced 24 yaml[indentation] findings in the 1.45.1
+      # review after .yamllint stopped shipping.
+      - name: Run ansible-lint against the artifact
+        run: |
+          pip install ansible-lint
+          cd /tmp/tree/ansible_collections/everpure/flasharray
+          ansible-lint --profile production

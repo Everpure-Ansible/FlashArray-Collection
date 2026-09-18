@@ -21,6 +21,7 @@ Bugfixes
 - collection - Fixed ``ansible-test sanity`` failing the ``ignores`` test on the built collection. ``galaxy.yml`` excludes ``tests/unit`` from the build, but ``tests/sanity/ignore-2.16.txt`` still referenced three files in that directory, and an ignore entry whose target does not exist is an error. The ignore file is no longer needed and has been removed.
 - collection - Fixed ``tests/config.yaml`` never being read. ``ansible-test`` looks for ``tests/config.yml``, so ``python_requires`` was not applied and the Python 2.7 compile and import tests still ran, which is why 129 ignore entries existed to suppress them. The file is renamed and now declares ``>=3.9``, matching the Python version the collection supports.
 - collection - Fixed a release archive of a previous version being shipped inside the collection. ``purestorage-flasharray-1.43.0.tar.gz`` was installed onto every system that installed 1.45.0. Archives and repository-only dotfiles are now excluded by ``build_ignore``.
+- collection - Fixed the YAML indentation that ansible-lint reports on the built collection. These were suppressed while .yamllint shipped inside the tarball; it is development tooling and no longer ships, so the sequences in meta/runtime.yml and nine module documentation blocks are indented conformantly instead. A documentation formatting change only - every DOCUMENTATION, EXAMPLES and RETURN block parses to exactly the same content as before.
 
 v1.45.0
 =======
