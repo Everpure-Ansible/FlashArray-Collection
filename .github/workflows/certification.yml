@@ -95,7 +95,9 @@ jobs:
       - name: Fail if the changelog has no entry for this version
         run: |
           cd /tmp/tree/ansible_collections/everpure/flasharray
-          version="$(python -c 'import yaml;print(yaml.safe_load(open("galaxy.yml"))["version"])')"
+          # galaxy.yml is not in the artifact - ansible-galaxy replaces it with
+          # MANIFEST.json, which carries the version under collection_info.
+          version="$(python -c 'import json;print(json.load(open("MANIFEST.json"))["collection_info"]["version"])')"
           if ! grep -q "^v${version}$" CHANGELOG.rst; then
             echo "::error::CHANGELOG.rst has no v${version} section."
             echo "Run 'antsibull-changelog release' before tagging."
