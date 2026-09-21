@@ -36,7 +36,7 @@ options:
         admins, volumes, snapshots, pods, replication, vgroups, offload, apps,
         arrays, certs, kmip, clients, policies, dir_snaps, filesystems,
         alerts, virtual_machines, subscriptions, realms, fleet, presets,
-        workloads, tgroups, software and support.
+        workloads, tgroups, servers, software and support.
     type: list
     elements: str
     required: false
@@ -134,6 +134,7 @@ SUPPORT_MANIFEST_API_VERSION = "2.51"
 # Directory user and group quotas, and the directory identity views,
 # arrived together with the local users and groups they report on
 DIR_IDENTITY_API_VERSION = "2.44"
+SERVER_API_VERSION = "2.44"
 # Replication throughput and lag, each on its own release
 REPL_LAG_API_VERSION = "2.2"
 PGROUP_REPL_PERF_API_VERSION = "2.1"
@@ -3111,6 +3112,39 @@ def generate_tgroups_dict(array):
     return tgroups_info
 
 
+def generate_servers_dict(module, array):
+    servers_info = {}
+    res = array.get_servers()
+    if res.status_code != 200:
+        return servers_info
+    servers = list(res.items)
+    if not servers:
+        module.warn("No servers are configured on this array")
+        return servers_info
+    iface_servers = {}
+    if servers:
+        # Build a map of server name → list of interface names attached to it
+        iface_res = array.get_network_interfaces()
+        if iface_res.status_code == 200:
+            for iface in list(iface_res.items):
+                for ref in getattr(iface, "attached_servers", None) or []:
+                    server_name = getattr(ref, "name", None)
+                    if server_name:
+                        iface_servers.setdefault(server_name, []).append(iface.name)
+    for server in servers:
+        name = server.name
+        dns_refs = getattr(server, "dns", None) or []
+        ds_refs = getattr(server, "directory_services", None) or []
+        lds_ref = getattr(server, "local_directory_service", None)
+        servers_info[name] = {
+            "dns": getattr(next(iter(dns_refs), None), "name", None),
+            "directory_service": getattr(next(iter(ds_refs), None), "name", None),
+            "local_directory_service": getattr(lds_ref, "name", None),
+            "network_interfaces": sorted(iface_servers.get(name, [])),
+        }
+    return servers_info
+
+
 def generate_preset_dict(array):
 
     def to_plain(value):
@@ -3683,6 +3717,7 @@ def main():
         "presets",
         "workloads",
         "tgroups",
+        "servers",
         "software",
         "support",
     )
@@ -3790,6 +3825,10 @@ def main():
         "tgroups" in subset or "all" in subset
     ):
         info["tgroups"] = generate_tgroups_dict(array)
+    if LooseVersion(SERVER_API_VERSION) <= LooseVersion(api_version) and (
+        "servers" in subset or "all" in subset
+    ):
+        info["servers"] = generate_servers_dict(module, array)
     if "replication" in subset or "all" in subset:
         info["replication_performance"] = generate_replication_perf_dict(
             array, api_version

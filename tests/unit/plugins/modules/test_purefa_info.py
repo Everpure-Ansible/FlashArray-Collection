@@ -83,6 +83,7 @@ from plugins.modules.purefa_info import (
     generate_dir_snaps_dict,
     generate_policies_dict,
     generate_clients_dict,
+    generate_servers_dict,
 )
 
 
@@ -2472,3 +2473,121 @@ class TestReplicationPerf:
 
         assert out["pod_replica_links"] == {}
         assert out["pods"] == {}
+
+
+class TestGenerateServersDict:
+    """Test cases for generate_servers_dict function"""
+
+    def test_generate_servers_dict_success(self):
+        """Test file server dict generation with all references and an attached interface"""
+        mock_array = Mock()
+        mock_module = Mock()
+
+        mock_dns_ref = Mock()
+        mock_dns_ref.name = "dns-config"
+        mock_ds_ref = Mock()
+        mock_ds_ref.name = "ds-config"
+        mock_lds_ref = Mock()
+        mock_lds_ref.name = "lds-config"
+
+        mock_server = Mock()
+        mock_server.name = "server1"
+        mock_server.dns = [mock_dns_ref]
+        mock_server.directory_services = [mock_ds_ref]
+        mock_server.local_directory_service = mock_lds_ref
+
+        mock_iface_ref = Mock()
+        mock_iface_ref.name = "server1"
+        mock_iface = Mock()
+        mock_iface.name = "eth0"
+        mock_iface.attached_servers = [mock_iface_ref]
+
+        mock_array.get_servers.return_value = Mock(status_code=200, items=[mock_server])
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[mock_iface]
+        )
+
+        result = generate_servers_dict(mock_module, mock_array)
+
+        assert "server1" in result
+        assert result["server1"]["dns"] == "dns-config"
+        assert result["server1"]["directory_service"] == "ds-config"
+        assert result["server1"]["local_directory_service"] == "lds-config"
+        assert result["server1"]["network_interfaces"] == ["eth0"]
+
+    def test_generate_servers_dict_no_references(self):
+        """Test file server with no DNS, DS, or LDS returns None for each"""
+        mock_array = Mock()
+        mock_module = Mock()
+
+        mock_server = Mock()
+        mock_server.name = "server1"
+        mock_server.dns = []
+        mock_server.directory_services = []
+        mock_server.local_directory_service = None
+
+        mock_iface = Mock()
+        mock_iface.name = "eth0"
+        mock_iface.attached_servers = []
+
+        mock_array.get_servers.return_value = Mock(status_code=200, items=[mock_server])
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[mock_iface]
+        )
+
+        result = generate_servers_dict(mock_module, mock_array)
+
+        assert result["server1"]["dns"] is None
+        assert result["server1"]["directory_service"] is None
+        assert result["server1"]["local_directory_service"] is None
+        assert result["server1"]["network_interfaces"] == []
+
+    def test_generate_servers_dict_interfaces_sorted(self):
+        """Test that attached interfaces are returned in sorted order"""
+        mock_array = Mock()
+        mock_module = Mock()
+
+        mock_server = Mock()
+        mock_server.name = "server1"
+        mock_server.dns = []
+        mock_server.directory_services = []
+        mock_server.local_directory_service = None
+
+        def _iface(name):
+            ref = Mock()
+            ref.name = "server1"
+            iface = Mock()
+            iface.name = name
+            iface.attached_servers = [ref]
+            return iface
+
+        mock_array.get_servers.return_value = Mock(status_code=200, items=[mock_server])
+        mock_array.get_network_interfaces.return_value = Mock(
+            status_code=200, items=[_iface("eth2"), _iface("eth0"), _iface("eth1")]
+        )
+
+        result = generate_servers_dict(mock_module, mock_array)
+
+        assert result["server1"]["network_interfaces"] == ["eth0", "eth1", "eth2"]
+
+    def test_generate_servers_dict_empty_list_skips_interface_call(self):
+        """Test that get_network_interfaces is not called when no servers are configured"""
+        mock_array = Mock()
+        mock_module = Mock()
+        mock_array.get_servers.return_value = Mock(status_code=200, items=[])
+
+        generate_servers_dict(mock_module, mock_array)
+
+        mock_array.get_network_interfaces.assert_not_called()
+        mock_module.warn.assert_called_once()
+
+    def test_generate_servers_dict_non_200_returns_empty(self):
+        """Test that a non-200 response from get_servers returns an empty dict"""
+        mock_array = Mock()
+        mock_module = Mock()
+        mock_array.get_servers.return_value = Mock(status_code=403, items=[])
+
+        result = generate_servers_dict(mock_module, mock_array)
+
+        assert result == {}
+        mock_array.get_network_interfaces.assert_not_called()
