@@ -3112,21 +3112,25 @@ def generate_tgroups_dict(array):
     return tgroups_info
 
 
-def generate_servers_dict(array):
+def generate_servers_dict(module, array):
     servers_info = {}
     res = array.get_servers()
     if res.status_code != 200:
         return servers_info
     servers = list(res.items)
-    # Build a map of interface name → list of server names it is attached to
-    iface_res = array.get_network_interfaces()
+    if not servers:
+        module.warn("No servers are configured on this array")
+        return servers_info
     iface_servers = {}
-    if iface_res.status_code == 200:
-        for iface in list(iface_res.items):
-            for ref in getattr(iface, "attached_servers", None) or []:
-                server_name = getattr(ref, "name", None)
-                if server_name:
-                    iface_servers.setdefault(server_name, []).append(iface.name)
+    if servers:
+        # Build a map of server name → list of interface names attached to it
+        iface_res = array.get_network_interfaces()
+        if iface_res.status_code == 200:
+            for iface in list(iface_res.items):
+                for ref in getattr(iface, "attached_servers", None) or []:
+                    server_name = getattr(ref, "name", None)
+                    if server_name:
+                        iface_servers.setdefault(server_name, []).append(iface.name)
     for server in servers:
         name = server.name
         dns_refs = getattr(server, "dns", None) or []
@@ -3824,7 +3828,7 @@ def main():
     if LooseVersion(SERVER_API_VERSION) <= LooseVersion(api_version) and (
         "servers" in subset or "all" in subset
     ):
-        info["servers"] = generate_servers_dict(array)
+        info["servers"] = generate_servers_dict(module, array)
     if "replication" in subset or "all" in subset:
         info["replication_performance"] = generate_replication_perf_dict(
             array, api_version
