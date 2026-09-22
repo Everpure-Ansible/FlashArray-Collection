@@ -59,9 +59,13 @@ from plugins.modules.purefa_network import (
     update_fc_interface,
     update_interface,
     create_interface,
+    _attached_server_name,
+    _attached_servers_value,
     _check_subinterfaces,
     _create_subordinates,
     _create_subinterfaces,
+    _is_fc_interface,
+    _update_attached_server,
 )
 
 
@@ -300,6 +304,7 @@ class TestUpdateInterface:
             "name": "ct0.eth8",
             "state": "present",
             "enabled": True,
+            "server": None,
             "servicelist": None,
             "address": None,
             "gateway": None,
@@ -728,6 +733,8 @@ class TestCreateInterfaceSuccess:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["ct0.eth8", "ct1.eth8"],
         }
         mock_array = Mock()
@@ -754,6 +761,8 @@ class TestCreateInterfaceSuccess:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
         }
         mock_array = Mock()
@@ -838,6 +847,7 @@ class TestUpdateEthInterface:
             "subinterfaces": None,
             "subordinates": None,
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": 9000,
             "gateway": None,
@@ -875,6 +885,7 @@ class TestUpdateEthInterface:
             "subinterfaces": None,
             "subordinates": None,
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": None,
             "gateway": None,
@@ -911,6 +922,7 @@ class TestUpdateEthInterface:
             "subinterfaces": None,
             "subordinates": None,
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": 100,  # Out of range
             "gateway": None,
@@ -952,6 +964,7 @@ class TestUpdateEthInterface:
             "subinterfaces": None,
             "subordinates": None,
             "enabled": False,  # Changing from True to False
+            "server": None,
             "address": None,
             "mtu": None,
             "gateway": None,
@@ -994,6 +1007,7 @@ class TestUpdateEthInterface:
             "subinterfaces": None,
             "subordinates": None,
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": None,
             "gateway": None,
@@ -1041,6 +1055,8 @@ class TestCreateInterfaceLacp:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subordinates": ["ct0.eth0", "ct0.eth1"],
             "subinterfaces": None,
         }
@@ -1098,6 +1114,8 @@ class TestCreateInterfaceWithSubnet:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["eth8"],
         }
         mock_array = Mock()
@@ -1130,6 +1148,8 @@ class TestCreateInterfaceWithSubnet:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["eth8"],
         }
         mock_array = Mock()
@@ -1169,6 +1189,8 @@ class TestCreateInterfaceFailure:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["eth8"],
         }
         mock_array = Mock()
@@ -1209,6 +1231,8 @@ class TestCreateInterfaceFailure:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["eth8"],
         }
         mock_array = Mock()
@@ -1303,6 +1327,7 @@ class TestUpdateEthInterfaceWithSubinterfaces:
             "subinterfaces": ["eth8"],
             "subordinates": None,
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": 9000,  # Changed MTU
             "gateway": None,
@@ -1354,6 +1379,7 @@ class TestUpdateEthInterfaceSubordinates:
             "subinterfaces": None,
             "subordinates": ["ct0.eth0", "ct0.eth1", "ct0.eth2"],  # Adding one
             "enabled": True,
+            "server": None,
             "address": None,
             "mtu": 9000,  # Changed MTU to trigger update path
             "gateway": None,
@@ -1403,6 +1429,8 @@ class TestCreateInterfaceLacpWithParams:
             "gateway": None,
             "mtu": 9000,
             "enabled": False,
+            "servicelist": None,
+            "server": None,
             "subordinates": ["ct0.eth0", "ct0.eth1"],
             "subinterfaces": None,
         }
@@ -1441,6 +1469,8 @@ class TestCreateInterfaceVifWithSubnet:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": ["eth8"],
         }
         mock_array = Mock()
@@ -1785,6 +1815,8 @@ class TestCreateInterfaceCheckMode:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -1843,6 +1875,7 @@ class TestUpdateInterfaceAddressValidation:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -1893,6 +1926,7 @@ class TestUpdateInterfaceAddressValidation:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -1938,6 +1972,7 @@ class TestUpdateInterfaceMtuValidation:
             "mtu": 1000,  # Below minimum of 1280
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -1978,6 +2013,7 @@ class TestUpdateInterfaceMtuValidation:
             "mtu": 10000,  # Above maximum of 9216
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2024,6 +2060,8 @@ class TestCreateInterfaceWithSubnetFailure:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2061,6 +2099,8 @@ class TestCreateInterfaceWithSubnetFailure:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2107,6 +2147,8 @@ class TestCreateInterfaceAddressValidation:
             "gateway": "192.168.1.1",  # Not in 10.0.0.0/24 subnet
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2144,6 +2186,8 @@ class TestCreateInterfaceNoSubnetNoSubinterfaces:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2179,6 +2223,7 @@ class TestUpdateInterfaceGatewayClearing:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2261,6 +2306,7 @@ def _bringup_params(name="ct0.eth4"):
         "subinterfaces": None,
         "subordinates": None,
         "enabled": True,
+        "server": None,
     }
 
 
@@ -2503,6 +2549,7 @@ class TestUpdateInterfaceKeptGatewayCompatibility:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2554,6 +2601,7 @@ class TestUpdateInterfaceSubinterfacesChange:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": ["eth1"],  # Request subinterfaces
             "subordinates": None,
             "subnet": None,
@@ -2611,6 +2659,7 @@ class TestUpdateInterfaceGatewayValidation:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2660,6 +2709,7 @@ class TestUpdateInterfaceIpv6Address:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2732,6 +2782,7 @@ class TestUpdateInterfaceIpVersionChange:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2783,6 +2834,7 @@ class TestUpdateInterfaceNewSubinterfaces:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": ["eth1"],
             "subordinates": None,
         }
@@ -2833,6 +2885,8 @@ class TestCreateInterfaceIpv6:
             "gateway": None,
             "mtu": 1500,
             "enabled": True,
+            "servicelist": None,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2877,6 +2931,7 @@ class TestUpdateInterfaceGatewayIncompatibleNoGateway:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2928,6 +2983,7 @@ class TestUpdateInterfaceNetmaskZero:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -2987,6 +3043,7 @@ class TestUpdateInterfaceIpv4GatewayNotInSubnet:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3045,6 +3102,7 @@ class TestUpdateInterfaceEmptyGatewayException:
             "mtu": 1500,
             "servicelist": ["iscsi"],  # Trigger service change
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3086,6 +3144,7 @@ class TestUpdateInterfaceGatewayOnlyBugFixes:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3135,6 +3194,7 @@ class TestUpdateInterfaceGatewayOnlyBugFixes:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3179,6 +3239,7 @@ class TestUpdateInterfaceGatewayOnlyBugFixes:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3216,6 +3277,7 @@ class TestUpdateInterfaceGatewayOnlyBugFixes:
             "mtu": 1500,
             "servicelist": None,
             "enabled": True,
+            "server": None,
             "subinterfaces": None,
             "subordinates": None,
         }
@@ -3286,6 +3348,7 @@ def _clear_params(name="ct0.eth4"):
         "subinterfaces": None,
         "subordinates": None,
         "enabled": True,
+        "server": None,
     }
 
 
@@ -3447,3 +3510,389 @@ class TestUpdateEthInterfaceClearAddress:
             update_interface(mock_module, mock_array)
 
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class FakeReference:
+    """Stand-in for the SDK's Reference model, which is mocked out wholesale
+
+    The reference the module builds is otherwise a MagicMock, so what was sent
+    to the array cannot be asserted on.
+    """
+
+    def __init__(self, name=None):
+        self.name = name
+
+
+class FakeNetworkInterfacePatch:
+    """Stand-in for the SDK patch model that records what it was built from"""
+
+    def __init__(self, **fields):
+        self.fields = fields
+
+
+class FakeNetworkInterfacePost:
+    """Stand-in for the SDK post model that records what it was built from"""
+
+    def __init__(self, **fields):
+        self.fields = fields
+
+
+def _server_params(name="filevif1", server=None):
+    """Params for a play naming a file server and nothing else (#1075)"""
+    return {
+        "name": name,
+        "state": "present",
+        "address": None,
+        "gateway": None,
+        "mtu": None,
+        "servicelist": None,
+        "interface": None,
+        "subinterfaces": None,
+        "subordinates": None,
+        "subnet": None,
+        "enabled": True,
+        "server": server,
+    }
+
+
+def _attached_interface(server=None, name="filevif1"):
+    """A file VIF, attached to a file server or to nothing
+
+    An interface with no server omits attached_servers entirely rather than
+    reporting it as null, so the unattached case has to come from a stand-in
+    that raises the way the SDK does.
+    """
+    fields = {"name": name, "enabled": True, "services": ["file"]}
+    if server is not None:
+        fields["attached_servers"] = [_subref(server)] if server else []
+    return FakeInterface(
+        FakeEth(
+            mtu=1500,
+            subinterfaces=[],
+            address="10.21.200.30",
+            netmask="255.255.255.0",
+            gateway="10.21.200.1",
+        ),
+        **fields,
+    )
+
+
+class TestAttachedServerReading:
+    """Issue #1075 - reading the file server an interface is attached to"""
+
+    def test_unattached_interface_reports_no_server(self):
+        """Most interfaces have no server, and omit the field altogether"""
+        assert _attached_server_name(_attached_interface()) is None
+
+    def test_empty_attachment_list_reports_no_server(self):
+        """An interface created with attached_servers=[] reports an empty list"""
+        assert _attached_server_name(_attached_interface(server="")) is None
+
+    def test_attached_interface_reports_the_server_name(self):
+        assert _attached_server_name(_attached_interface("filesvr1")) == "filesvr1"
+
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    def test_a_name_is_sent_as_a_single_reference(self):
+        """The API takes a list of at most one reference"""
+        sent = _attached_servers_value("filesvr1")
+        assert [reference.name for reference in sent] == ["filesvr1"]
+
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    def test_an_empty_name_is_sent_as_the_empty_list(self):
+        """The empty list is how the API expresses no server at all"""
+        assert _attached_servers_value("") == []
+
+
+class TestUpdateAttachedServer:
+    """Issue #1075 - attaching an existing interface to a file server"""
+
+    def test_option_omitted_leaves_the_attachment_alone(self):
+        """A task that says nothing about file servers never detaches one"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server=None)
+        mock_array = Mock()
+
+        assert (
+            _update_attached_server(
+                mock_module, mock_array, _attached_interface("filesvr1")
+            )
+            is False
+        )
+        mock_array.patch_network_interfaces.assert_not_called()
+
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePatch",
+        FakeNetworkInterfacePatch,
+    )
+    def test_attaching_is_idempotent(self, mock_check_response):
+        """The first run attaches; a second run against the result does not"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server="filesvr1")
+        mock_array = Mock()
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        assert (
+            _update_attached_server(mock_module, mock_array, _attached_interface())
+            is True
+        )
+        sent = mock_array.patch_network_interfaces.call_args[1]["network"]
+        assert [reference.name for reference in sent.fields["attached_servers"]] == [
+            "filesvr1"
+        ]
+
+        mock_array.patch_network_interfaces.reset_mock()
+        assert (
+            _update_attached_server(
+                mock_module, mock_array, _attached_interface("filesvr1")
+            )
+            is False
+        )
+        mock_array.patch_network_interfaces.assert_not_called()
+
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePatch",
+        FakeNetworkInterfacePatch,
+    )
+    def test_detaching_is_idempotent(self, mock_check_response):
+        """An empty server detaches, and reports no change once detached"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server="")
+        mock_array = Mock()
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        assert (
+            _update_attached_server(
+                mock_module, mock_array, _attached_interface("filesvr1")
+            )
+            is True
+        )
+        sent = mock_array.patch_network_interfaces.call_args[1]["network"]
+        assert sent.fields["attached_servers"] == []
+
+        mock_array.patch_network_interfaces.reset_mock()
+        assert (
+            _update_attached_server(mock_module, mock_array, _attached_interface())
+            is False
+        )
+        mock_array.patch_network_interfaces.assert_not_called()
+
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePatch",
+        FakeNetworkInterfacePatch,
+    )
+    def test_moving_to_another_server_is_a_change(self, mock_check_response):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server="filesvr2")
+        mock_array = Mock()
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        assert (
+            _update_attached_server(
+                mock_module, mock_array, _attached_interface("filesvr1")
+            )
+            is True
+        )
+        sent = mock_array.patch_network_interfaces.call_args[1]["network"]
+        assert [reference.name for reference in sent.fields["attached_servers"]] == [
+            "filesvr2"
+        ]
+
+    def test_check_mode_reports_the_change_without_making_it(self):
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = _server_params(server="filesvr2")
+        mock_array = Mock()
+
+        assert (
+            _update_attached_server(
+                mock_module, mock_array, _attached_interface("filesvr1")
+            )
+            is True
+        )
+        mock_array.patch_network_interfaces.assert_not_called()
+
+
+class TestUpdateInterfaceAttachedServer:
+    """Issue #1075 - a server change through update_interface"""
+
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePatch",
+        FakeNetworkInterfacePatch,
+    )
+    def test_server_change_alone_does_not_rewrite_ip_settings(
+        self, mock_check_response
+    ):
+        """Only the attachment is patched when only the attachment differs"""
+        import pytest
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.params = _server_params(server="filesvr1")
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            items=[_attached_interface()]
+        )
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        with pytest.raises(SystemExit):
+            update_interface(mock_module, mock_array)
+
+        assert mock_array.patch_network_interfaces.call_count == 1
+        sent = mock_array.patch_network_interfaces.call_args[1]["network"]
+        assert "attached_servers" in sent.fields
+        assert "eth" not in sent.fields
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_network.check_response")
+    def test_matching_server_reports_no_change(self, mock_check_response):
+        """Re-running the same task against the array reports nothing to do"""
+        import pytest
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.params = _server_params(server="filesvr1")
+        mock_array = Mock()
+        mock_array.get_network_interfaces.return_value = Mock(
+            items=[_attached_interface("filesvr1")]
+        )
+
+        with pytest.raises(SystemExit):
+            update_interface(mock_module, mock_array)
+
+        mock_array.patch_network_interfaces.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+
+class TestCreateInterfaceAttachedServer:
+    """Issue #1075 - the create carries the server, and #1076 the services"""
+
+    @patch("plugins.modules.purefa_network._create_subinterfaces")
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePost", FakeNetworkInterfacePost
+    )
+    def test_vif_create_sends_the_server_and_the_service_list(
+        self, mock_check_response, mock_create_subinterfaces
+    ):
+        """Both take effect on the run that creates the interface"""
+        mock_create_subinterfaces.return_value = (False, ["ct0.eth8"])
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server="filesvr1")
+        mock_module.params["interface"] = "vif"
+        mock_module.params["subinterfaces"] = ["eth8"]
+        mock_module.params["servicelist"] = ["file"]
+        mock_array = Mock()
+        mock_array.post_network_interfaces.return_value = Mock(status_code=200)
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        create_interface(mock_module, mock_array)
+
+        sent = mock_array.post_network_interfaces.call_args[1]["network"]
+        assert sent.fields["services"] == ["file"]
+        assert [reference.name for reference in sent.fields["attached_servers"]] == [
+            "filesvr1"
+        ]
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_network._create_subinterfaces")
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePost", FakeNetworkInterfacePost
+    )
+    def test_create_without_a_server_sends_no_attachment(
+        self, mock_check_response, mock_create_subinterfaces
+    ):
+        """Omitting the option leaves the array to attach its default server
+
+        Sending an empty list instead would create the interface attached to
+        nothing, which is not what the previous behaviour was.
+        """
+        mock_create_subinterfaces.return_value = (False, ["ct0.eth8"])
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server=None)
+        mock_module.params["interface"] = "vif"
+        mock_module.params["subinterfaces"] = ["eth8"]
+        mock_array = Mock()
+        mock_array.post_network_interfaces.return_value = Mock(status_code=200)
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        create_interface(mock_module, mock_array)
+
+        sent = mock_array.post_network_interfaces.call_args[1]["network"]
+        assert "attached_servers" not in sent.fields
+        assert "services" not in sent.fields
+
+    @patch("plugins.modules.purefa_network._create_subinterfaces")
+    @patch("plugins.modules.purefa_network.check_response")
+    @patch("plugins.modules.purefa_network.Reference", FakeReference)
+    @patch(
+        "plugins.modules.purefa_network.NetworkInterfacePost", FakeNetworkInterfacePost
+    )
+    def test_create_detached_sends_the_empty_list(
+        self, mock_check_response, mock_create_subinterfaces
+    ):
+        """An empty server is the only way to create an unattached interface"""
+        mock_create_subinterfaces.return_value = (False, ["ct0.eth8"])
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server="")
+        mock_module.params["interface"] = "vif"
+        mock_module.params["subinterfaces"] = ["eth8"]
+        mock_array = Mock()
+        mock_array.post_network_interfaces.return_value = Mock(status_code=200)
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        create_interface(mock_module, mock_array)
+
+        sent = mock_array.post_network_interfaces.call_args[1]["network"]
+        assert sent.fields["attached_servers"] == []
+
+    @patch("plugins.modules.purefa_network._create_subinterfaces")
+    @patch("plugins.modules.purefa_network.check_response")
+    def test_no_subnet_is_not_looked_up(
+        self, mock_check_response, mock_create_subinterfaces
+    ):
+        """Reading the subnet unconditionally asks for one named None"""
+        mock_create_subinterfaces.return_value = (False, ["ct0.eth8"])
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _server_params(server=None)
+        mock_module.params["interface"] = "vif"
+        mock_module.params["subinterfaces"] = ["eth8"]
+        mock_array = Mock()
+        mock_array.post_network_interfaces.return_value = Mock(status_code=200)
+        mock_array.patch_network_interfaces.return_value = Mock(status_code=200)
+
+        create_interface(mock_module, mock_array)
+
+        mock_array.get_subnets.assert_not_called()
+
+
+class TestIsFcInterface:
+    """Issue #1075 - the server option is rejected for Fibre Channel ports"""
+
+    def test_fc_ports_are_recognised(self):
+        assert _is_fc_interface("ct0.fc1") is True
+
+    def test_eth_ports_are_not_fc(self):
+        assert _is_fc_interface("ct0.eth4") is False
+
+    def test_a_vif_has_no_controller_prefix(self):
+        assert _is_fc_interface("filevif1") is False

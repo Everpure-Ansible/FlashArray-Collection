@@ -1345,6 +1345,7 @@ class TestGenerateNetworkDict:
         mock_port.speed = 10000000000
         mock_port.services = ["management"]
         mock_port.eth = mock_eth
+        mock_port.attached_servers = None
 
         mock_array.get_network_interfaces.return_value = Mock(items=[mock_port])
         mock_array.get_network_interfaces_performance.return_value = Mock(items=[])
@@ -1354,6 +1355,70 @@ class TestGenerateNetworkDict:
 
         assert "ct0.eth0" in result
         assert result["ct0.eth0"]["address"] == "10.0.0.10"
+        assert result["ct0.eth0"]["attached_server"] is None
+
+
+class TestGenerateNetworkDictAttachedServer:
+    """Issue #1075 - the file server an Ethernet interface is attached to"""
+
+    class FakePort:
+        """Stand-in for the SDK interface model
+
+        py-pure-client raises AttributeError for a field the array returned as
+        null, and an interface with no file server omits attached_servers
+        entirely - which is true of most of them.
+        """
+
+        def __init__(self, **fields):
+            self._fields = fields
+
+        def __getattr__(self, name):
+            value = self._fields.get(name)
+            if value is None:
+                raise AttributeError(name)
+            return value
+
+    def _eth_port(self, **extra):
+        eth = Mock()
+        eth.mac_address = "00:50:56:ab:cd:ef"
+        eth.mtu = 1500
+        eth.address = "10.21.200.30"
+        eth.gateway = "10.21.200.1"
+        eth.netmask = "255.255.255.0"
+        eth.subtype = "vif"
+        eth.vlan = None
+        eth.subinterfaces = []
+        eth.subnet = Mock(name="file-subnet")
+        return self.FakePort(
+            name="filevif1",
+            interface_type="eth",
+            enabled=True,
+            speed=10000000000,
+            services=["file"],
+            eth=eth,
+            **extra,
+        )
+
+    def _network_dict(self, port):
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.44"
+        mock_array.get_network_interfaces.return_value = Mock(items=[port])
+        mock_array.get_network_interfaces_performance.return_value = Mock(items=[])
+        mock_array.get_network_interfaces_neighbors.return_value = Mock(items=[])
+        return generate_network_dict(mock_array, performance=False)
+
+    def test_unattached_interface_reports_none(self):
+        """Reading the field without a default raises on most interfaces"""
+        result = self._network_dict(self._eth_port())
+
+        assert result["filevif1"]["attached_server"] is None
+
+    def test_attached_interface_reports_the_server_name(self):
+        reference = Mock()
+        reference.name = "filesvr1"
+        result = self._network_dict(self._eth_port(attached_servers=[reference]))
+
+        assert result["filevif1"]["attached_server"] == "filesvr1"
 
 
 class TestGenerateRlDict:
