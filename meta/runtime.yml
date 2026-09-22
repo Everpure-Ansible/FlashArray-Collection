@@ -39,6 +39,7 @@ action_groups:
     - purefa_logging
     - purefa_maintenance
     - purefa_messages
+    - purefa_metrics
     - purefa_network
     - purefa_ntp
     - purefa_offload
