@@ -99,8 +99,28 @@ options:
     type: bool
     default: true
     version_added: '1.22.0'
+  server:
+    description:
+      - Name of the file server the interface is attached to for data ingress.
+      - An Ethernet interface can be attached to at most one file server. File
+        servers themselves are managed by M(everpure.flasharray.purefa_server).
+      - Omit this to leave the attachment alone. A newly created interface is
+        then attached to the array's default C(_array_server), which is what the
+        array does when the attachment is not specified.
+      - Set to an empty string to attach the interface to no file server at all,
+        which detaches an existing interface from the server it is on.
+      - Only applies to Ethernet interfaces.
+    type: str
+    version_added: '1.46.0'
 extends_documentation_fragment:
     - everpure.flasharray.everpure.fa
+notes:
+  - I(server) requires Purity//FA REST API 2.44 or higher, which is where file
+    servers first appear.
+  - I(server) attaches only the interface it is given. To manage the full set of
+    interfaces a file server is reachable on, use the I(network_interfaces)
+    option of M(everpure.flasharray.purefa_server), which is declarative and
+    detaches any interface it is not given.
 """
 
 EXAMPLES = """
@@ -143,6 +163,27 @@ EXAMPLES = """
       - replication
     fa_url: 10.10.10.2
     api_token: c6033033-fe69-2515-a9e8-966bb7fe4b40
+
+- name: Create a file VIF attached to a file server
+  everpure.flasharray.purefa_network:
+    name: filevif1
+    interface: vif
+    subinterfaces:
+      - eth6
+    address: "10.21.200.30/24"
+    gateway: 10.21.200.1
+    server: filesvr1
+    servicelist:
+      - file
+    fa_url: 10.10.10.2
+    api_token: c6033033-fe69-2515-a9e8-966bb7fe4b40
+
+- name: Detach a file VIF from the file server it is attached to
+  everpure.flasharray.purefa_network:
+    name: filevif1
+    server: ""
+    fa_url: 10.10.10.2
+    api_token: c6033033-fe69-2515-a9e8-966bb7fe4b40
 """
 
 RETURN = """
@@ -162,6 +203,7 @@ try:
         NetworkinterfacepostEth,
         NetworkinterfacepatchEth,
         FixedReferenceNoId,
+        Reference,
         ReferenceNoId,
     )
 
@@ -175,8 +217,13 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.purefa import 
     purefa_argument_spec,
 )
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
+    check_api_version,
     check_response,
 )
+
+# File servers, and the network interface field that attaches an interface to
+# one, arrived together in this version
+SERVER_API_VERSION = "2.44"
 
 # An unconfigured address, netmask or gateway is reported by the array as null,
 # but is cleared by writing 0.0.0.0 (or :: for IPv6). Those describe the same
@@ -196,6 +243,60 @@ def _comparable_state(state):
     if comparable["netmask"] in UNSET_NETMASK:
         comparable["netmask"] = ""
     return comparable
+
+
+def _is_fc_interface(name):
+    """Whether an interface name is a Fibre Channel port, such as ct0.fc1"""
+    parts = name.split(".")
+    return len(parts) > 1 and parts[1].lower().startswith("f")
+
+
+def _attached_server_name(interface):
+    """Name of the file server an interface is attached to, or None
+
+    The array reports at most one, and reports no attachment by leaving the
+    field out entirely - reading interface.attached_servers directly raises
+    AttributeError on the interfaces that have no server, which is most of
+    them.
+    """
+    reference = next(iter(getattr(interface, "attached_servers", None) or []), None)
+    return getattr(reference, "name", None)
+
+
+def _attached_servers_value(server):
+    """Build the value the attached_servers field is sent as
+
+    The API takes a list of at most one reference, and documents the empty list
+    as "no server at all". On a create that is also the only way to opt out of
+    the array attaching the interface to its default _array_server.
+    """
+    return [Reference(name=server)] if server else []
+
+
+def _update_attached_server(module, array, interface):
+    """Make the interface's file server match the task
+
+    Returns whether anything needed changing. Does nothing when the task did
+    not name the option, so a task that says nothing about file servers never
+    detaches an interface from one.
+    """
+    if module.params["server"] is None:
+        return False
+    if _attached_server_name(interface) == (module.params["server"] or None):
+        return False
+    if not module.check_mode:
+        res = array.patch_network_interfaces(
+            names=[interface.name],
+            network=NetworkInterfacePatch(
+                attached_servers=_attached_servers_value(module.params["server"])
+            ),
+        )
+        check_response(
+            res,
+            module,
+            f"Failed to update the file server attached to {interface.name}",
+        )
+    return True
 
 
 def update_fc_interface(module, array, interface):
@@ -319,12 +420,8 @@ def update_interface(module, array):
     # An interface with no services assigned reports them as null
     services = getattr(interface, "services", None) or []
 
-    def is_fc_interface(ifname):
-        parts = ifname.split(".")
-        return len(parts) > 1 and parts[1].lower().startswith("f")
-
     # Modify FC Interface settings
-    if is_fc_interface(module.params["name"]):
+    if _is_fc_interface(module.params["name"]):
         if not interface.enabled and module.params["state"] == "present":
             changed = True
             if not module.check_mode:
@@ -568,18 +665,23 @@ def update_interface(module, array):
                         f"Failed to delete network interface {module.params['name']}",
                     )
                     create_interface(module, array)
+    # The file server is patched on its own rather than folded into the state
+    # comparison above, so that changing only the attachment does not rewrite
+    # the interface's IP settings as a side effect
+    if _update_attached_server(module, array, interface):
+        changed = True
     module.exit_json(changed=changed)
 
 
 def create_interface(module, array):
     changed = True
-    subnet_exists = bool(
-        array.get_subnets(names=[module.params["subnet"]]).status_code == 200
-    )
-    if module.params["subnet"] and not subnet_exists:
-        module.fail_json(
-            msg="Subnet {0} does not exist".format(module.params["subnet"])
-        )
+    # Only look the subnet up when one was asked for. Reading it unconditionally
+    # sends the array a request for a subnet named None.
+    if module.params["subnet"]:
+        if array.get_subnets(names=[module.params["subnet"]]).status_code != 200:
+            module.fail_json(
+                msg="Subnet {0} does not exist".format(module.params["subnet"])
+            )
 
     if module.params["interface"] == "vif":
         dummy, subinterfaces = _create_subinterfaces(module, array)
@@ -603,11 +705,24 @@ def create_interface(module, array):
                     module.fail_json(msg="Gateway and subnet are not compatible.")
         else:
             gateway = None
+        # The service list and the file server are settable on the create
+        # itself. The follow-up patches below carry neither, so sending them
+        # here is what makes them take effect on the run that creates the
+        # interface rather than only on the next one. Leaving the file server
+        # out is not the same as sending no server - the array then attaches
+        # the interface to its default _array_server.
+        post_settings = {}
+        if module.params["servicelist"]:
+            post_settings["services"] = module.params["servicelist"]
+        if module.params["server"] is not None:
+            post_settings["attached_servers"] = _attached_servers_value(
+                module.params["server"]
+            )
         if module.params["interface"] == "vif":
             res = array.post_network_interfaces(
                 names=[module.params["name"]],
                 network=NetworkInterfacePost(
-                    eth=NetworkinterfacepostEth(subtype="vif")
+                    eth=NetworkinterfacepostEth(subtype="vif"), **post_settings
                 ),
             )
         else:
@@ -617,6 +732,7 @@ def create_interface(module, array):
                     eth=NetworkinterfacepostEth(
                         subtype="lacpbond", subinterfaces=subinterfaces
                     ),
+                    **post_settings,
                 ),
             )
 
@@ -748,6 +864,7 @@ def main():
             subordinates=dict(type="list", elements="str"),
             subnet=dict(type="str"),
             enabled=dict(type="bool", default=True),
+            server=dict(type="str"),
         )
     )
 
@@ -777,6 +894,28 @@ def main():
         if module.params["servicelist"] and "system" in module.params["servicelist"]:
             module.fail_json(
                 msg="Only Cloud Block Store supports the 'system' service type"
+            )
+    if module.params["server"] is not None:
+        # The API applies attached_servers to Ethernet interfaces only, and
+        # rejects it for a Fibre Channel port with an error that does not say
+        # why, so the name is checked here first
+        if _is_fc_interface(module.params["name"]):
+            module.fail_json(
+                msg="server is only supported for Ethernet interfaces, "
+                "not Fibre Channel port {0}".format(module.params["name"])
+            )
+        check_api_version(
+            array,
+            SERVER_API_VERSION,
+            module,
+            "Attaching a network interface to a file server",
+        )
+        if (
+            module.params["server"]
+            and array.get_servers(names=[module.params["server"]]).status_code != 200
+        ):
+            module.fail_json(
+                msg="File server {0} does not exist".format(module.params["server"])
             )
     if "." in module.params["name"]:
         interface = bool(

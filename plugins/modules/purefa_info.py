@@ -951,7 +951,14 @@ def generate_network_dict(array, performance):
     for port in ports:
         int_name = port.name
         if port.interface_type == "eth":
+            # An interface reports at most one attached file server, and reports
+            # no attachment by leaving the field out entirely - which is most of
+            # them, so this has to be read with a default
+            attached_server = next(
+                iter(getattr(port, "attached_servers", None) or []), None
+            )
             net_info[int_name] = {
+                "attached_server": getattr(attached_server, "name", None),
                 "hwaddr": getattr(port.eth, "mac_address", None),
                 "mac_address": getattr(port.eth, "mac_address", None),
                 "mtu": getattr(port.eth, "mtu", None),

@@ -1,0 +1,15 @@
+minor_changes:
+  - purefa_network - add ``server`` option to attach an Ethernet interface to a
+    file server when it is created, rather than having to move it afterwards
+    with ``purefa_server``. Omitting the option keeps the existing behaviour, in
+    which the array attaches a new interface to its default ``_array_server``.
+    Set it to an empty string to attach an interface to no file server at all.
+    Requires Purity//FA REST API 2.44 or higher.
+  - purefa_info - report ``attached_server`` for each Ethernet interface in the
+    ``network`` subset, naming the file server the interface serves data for.
+bugfixes:
+  - purefa_network - the ``servicelist`` option was silently ignored on the run
+    that created an interface, and only took effect on a subsequent run. The
+    service list is now sent with the create itself.
+  - purefa_network - stop asking the array for a subnet named ``None`` on every
+    interface creation that does not specify ``subnet``.
