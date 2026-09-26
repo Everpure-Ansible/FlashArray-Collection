@@ -1,0 +1,13 @@
+bugfixes:
+  - purefa_info - Fixed ``created`` and ``time_remaining`` being ``null`` for
+    every protection group snapshot reported under the ``pgroups`` and
+    ``deleted_pgroups`` subsets. Both were hardcoded to ``None`` when the
+    module moved to REST 2 in 1.37.0, because they are fields of the snapshot
+    and the module only read the snapshot's transfer record, which carries
+    neither at any REST version.
+  - purefa_info - A protection group snapshot with no transfer record is now
+    reported. Only a replicated snapshot has one, so a protection group with
+    no replication target previously reported no snapshots at all.
+  - purefa_info - ``destroyed`` is no longer read from a protection group
+    snapshot transfer record without a default, which would raise
+    ``AttributeError`` on a record that omits it.
