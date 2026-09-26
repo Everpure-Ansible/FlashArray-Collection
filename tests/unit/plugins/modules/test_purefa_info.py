@@ -40,6 +40,8 @@ sys.modules["ansible_collections.everpure.flasharray.plugins.module_utils.versio
 from plugins.modules.purefa_info import (
     main,
     _is_cbs,
+    _pgroup_snaps_dict,
+    _pgroup_snapshots_by_name,
     generate_default_dict,
     generate_perf_dict,
     generate_admin_dict,
@@ -2656,3 +2658,286 @@ class TestGenerateServersDict:
 
         assert result == {}
         mock_array.get_network_interfaces.assert_not_called()
+
+
+class FakePgSnapshot:
+    """Stand-in for the SDK's ProtectionGroupSnapshot model
+
+    py-pure-client raises AttributeError for a field the array returned as
+    null rather than returning None. Mock returns a value for every attribute,
+    so a Mock-based test cannot tell a populated time_remaining from an absent
+    one - which is the whole of issue #1078.
+    """
+
+    def __init__(self, name, **fields):
+        self.name = name
+        self._fields = fields
+
+    def __getattr__(self, item):
+        value = self._fields.get(item)
+        if value is None:
+            raise AttributeError(item)
+        return value
+
+
+class FakePgSnapshotTransfer:
+    """Stand-in for the SDK's ProtectionGroupSnapshotTransfer model
+
+    Its declared fields are id, name, completed, data_transferred, destroyed,
+    physical_bytes_written, progress, started and context - neither created nor
+    time_remaining is among them, at any REST version.
+    """
+
+    def __init__(self, name, **fields):
+        self.name = name
+        self._fields = fields
+
+    def __getattr__(self, item):
+        value = self._fields.get(item)
+        if value is None:
+            raise AttributeError(item)
+        return value
+
+
+def _snapshot_array(snapshots=None, transfers=None, snapshots_status=200):
+    """A mock array answering the two protection group snapshot endpoints"""
+    array = Mock()
+    array.get_protection_group_snapshots.return_value = Mock(
+        status_code=snapshots_status, items=snapshots or []
+    )
+    array.get_protection_group_snapshots_transfer.return_value = Mock(
+        status_code=200, items=transfers or []
+    )
+    return array
+
+
+class TestPgroupSnapshotsByName:
+    """Issue #1078 - indexing the snapshots that carry created"""
+
+    def test_snapshots_are_indexed_by_name(self):
+        array = _snapshot_array(
+            snapshots=[FakePgSnapshot("pg1.1"), FakePgSnapshot("pg1.2")]
+        )
+
+        index = _pgroup_snapshots_by_name(array)
+
+        assert sorted(index) == ["pg1.1", "pg1.2"]
+
+    def test_a_non_200_gives_an_empty_index(self):
+        """An array with no protection group snapshots answers 400"""
+        array = _snapshot_array(snapshots=[], snapshots_status=400)
+
+        assert _pgroup_snapshots_by_name(array) == {}
+
+    def test_the_read_is_unfiltered(self):
+        """Destroyed snapshots are the only ones carrying time_remaining"""
+        array = _snapshot_array(snapshots=[])
+
+        _pgroup_snapshots_by_name(array)
+
+        array.get_protection_group_snapshots.assert_called_once_with()
+
+
+class TestPgroupSnapsDict:
+    """Issue #1078 - created and time_remaining come from the snapshot"""
+
+    def test_created_is_reported_from_the_snapshot(self):
+        """The regression: it was hardcoded to None from 1.37.0 onwards"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+        array = _snapshot_array(snapshots=[snapshot])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {"pg1.1": snapshot})
+
+        assert snaps["pg1.1"]["created"] == 1717443224368
+
+    def test_a_live_snapshot_has_no_time_remaining(self):
+        """The array omits it until the snapshot is destroyed"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+
+        snaps = _pgroup_snaps_dict(
+            _snapshot_array(snapshots=[snapshot]), "pg1", {"pg1.1": snapshot}
+        )
+
+        assert snaps["pg1.1"]["time_remaining"] is None
+
+    def test_a_destroyed_snapshot_reports_time_remaining(self):
+        snapshot = FakePgSnapshot(
+            "pg1.1", created=1717443224368, destroyed=True, time_remaining=86400000
+        )
+
+        snaps = _pgroup_snaps_dict(
+            _snapshot_array(snapshots=[snapshot]), "pg1", {"pg1.1": snapshot}
+        )
+
+        assert snaps["pg1.1"]["time_remaining"] == 86400000
+        assert snaps["pg1.1"]["destroyed"] is True
+
+    def test_a_snapshot_with_no_transfer_record_is_still_reported(self):
+        """A protection group with no replication target has none of them"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+        array = _snapshot_array(snapshots=[snapshot], transfers=[])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {"pg1.1": snapshot})
+
+        assert "pg1.1" in snaps
+        assert snaps["pg1.1"]["created"] == 1717443224368
+        for field in (
+            "started",
+            "completed",
+            "data_transferred",
+            "physical_bytes_written",
+            "progress",
+        ):
+            assert snaps["pg1.1"][field] is None, field
+
+    def test_transfer_detail_is_merged_in(self):
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+        transfer = FakePgSnapshotTransfer(
+            "pg1.1",
+            started=1773870567000,
+            completed=1773870570000,
+            data_transferred=184,
+            physical_bytes_written=0,
+            progress=1.0,
+            destroyed=False,
+        )
+        array = _snapshot_array(snapshots=[snapshot], transfers=[transfer])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {"pg1.1": snapshot})
+
+        assert snaps["pg1.1"] == {
+            "time_remaining": None,
+            "created": 1717443224368,
+            "started": 1773870567000,
+            "completed": 1773870570000,
+            "physical_bytes_written": 0,
+            "data_transferred": 184,
+            "progress": 1.0,
+            "destroyed": False,
+        }
+
+    def test_an_unreplicated_transfer_record_reports_nulls_not_errors(self):
+        """Every transfer field raises AttributeError until it replicates"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+        transfer = FakePgSnapshotTransfer("pg1.1", destroyed=False)
+        array = _snapshot_array(snapshots=[snapshot], transfers=[transfer])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {"pg1.1": snapshot})
+
+        assert snaps["pg1.1"]["progress"] is None
+        assert snaps["pg1.1"]["created"] == 1717443224368
+
+    def test_destroyed_falls_back_to_the_snapshot(self):
+        """The transfer record used to be read without a default"""
+        snapshot = FakePgSnapshot("pg1.1", created=1, destroyed=True, time_remaining=5)
+        transfer = FakePgSnapshotTransfer("pg1.1")
+        array = _snapshot_array(snapshots=[snapshot], transfers=[transfer])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {"pg1.1": snapshot})
+
+        assert snaps["pg1.1"]["destroyed"] is True
+
+    def test_another_groups_snapshots_are_not_claimed(self):
+        """A pod or realm name means one group name can prefix another"""
+        mine = FakePgSnapshot("test.1", created=1, destroyed=False)
+        theirs = FakePgSnapshot("test::simon.1", created=2, destroyed=False)
+        index = {"test.1": mine, "test::simon.1": theirs}
+        array = _snapshot_array(snapshots=[mine, theirs])
+
+        snaps = _pgroup_snaps_dict(array, "test", index)
+
+        assert sorted(snaps) == ["test.1"]
+
+    def test_a_transfer_with_no_snapshot_still_appears(self):
+        """Neither endpoint is assumed to be a superset of the other"""
+        transfer = FakePgSnapshotTransfer("pg1.1", progress=0.5, destroyed=False)
+        array = _snapshot_array(snapshots=[], transfers=[transfer])
+
+        snaps = _pgroup_snaps_dict(array, "pg1", {})
+
+        assert snaps["pg1.1"]["progress"] == 0.5
+        assert snaps["pg1.1"]["created"] is None
+
+
+class TestPgroupsDictSnaps:
+    """Issue #1078 through the two dict builders that report snaps"""
+
+    def _array(self, snapshot, transfers=None):
+        array = Mock()
+        array.get_rest_version.return_value = "2.38"
+        space = Mock(
+            snapshots=0,
+            shared=0,
+            data_reduction=1.0,
+            thin_provisioning=0,
+            total_physical=0,
+            total_provisioned=0,
+            total_reduction=1.0,
+            unique=0,
+            virtual=0,
+            replication=0,
+            used_provisioned=0,
+        )
+        pgroup = Mock()
+        pgroup.name = "pg1"
+        pgroup.source = Mock(name="local")
+        pgroup.snapshot_schedule = Mock(frequency=3600, enabled=True, at=None)
+        pgroup.replication_schedule = Mock(
+            frequency=86400, enabled=False, at=None, blackout=Mock(start=None, end=None)
+        )
+        pgroup.source_retention = Mock(per_day=2, days=7, all_for_sec=86400)
+        pgroup.target_retention = Mock(per_day=1, days=30, all_for_sec=86400)
+        pgroup.space = space
+        pgroup.time_remaining = 86400000
+        pgroup.eradication_config = Mock(manual_eradication=False)
+        pgroup.retention_lock = None
+        array.get_protection_groups.return_value = Mock(status_code=200, items=[pgroup])
+        array.get_protection_group_snapshots.return_value = Mock(
+            status_code=200, items=[snapshot]
+        )
+        array.get_protection_group_snapshots_transfer.return_value = Mock(
+            status_code=200, items=transfers or []
+        )
+        for endpoint in (
+            "get_protection_groups_volumes",
+            "get_protection_groups_hosts",
+            "get_protection_groups_host_groups",
+            "get_protection_groups_targets",
+            "get_protection_groups_tags",
+        ):
+            getattr(array, endpoint).return_value = Mock(items=[])
+        return array
+
+    def test_live_pgroups_report_created(self):
+        """With a transfer record present, the entry existed all along - it
+        was created that came back null, which is what issue #1078 reported"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+        transfer = FakePgSnapshotTransfer("pg1.1", progress=1.0, destroyed=False)
+
+        result = generate_pgroups_dict(self._array(snapshot, [transfer]))
+
+        snap = result["pg1"]["snaps"]["pg1.1"]
+        assert snap["created"] == 1717443224368
+        assert snap["progress"] == 1.0
+
+    def test_live_pgroups_report_a_snapshot_with_no_transfer(self):
+        """A group with no replication target has no transfer records at all"""
+        snapshot = FakePgSnapshot("pg1.1", created=1717443224368, destroyed=False)
+
+        result = generate_pgroups_dict(self._array(snapshot))
+
+        assert result["pg1"]["snaps"]["pg1.1"]["created"] == 1717443224368
+
+    def test_deleted_pgroups_report_created_and_time_remaining(self):
+        """The same bug existed in the deleted protection group builder"""
+        snapshot = FakePgSnapshot(
+            "pg1.1", created=1717443224368, destroyed=True, time_remaining=86400000
+        )
+
+        transfer = FakePgSnapshotTransfer("pg1.1", destroyed=True)
+
+        result = generate_del_pgroups_dict(self._array(snapshot, [transfer]))
+
+        snap = result["pg1"]["snaps"]["pg1.1"]
+        assert snap["created"] == 1717443224368
+        assert snap["time_remaining"] == 86400000

@@ -2065,10 +2065,64 @@ def generate_host_dict(array, performance):
     return host_info
 
 
+def _pgroup_snapshots_by_name(array):
+    """Every protection group snapshot on the array, indexed by name
+
+    created and time_remaining are fields of the snapshot, not of its transfer
+    record, so building the snaps dict needs both objects. Snapshot names are
+    globally unique - the protection group name and the suffix - so one
+    unfiltered read serves every protection group, and it costs less than a
+    filtered read per group. The unfiltered read includes destroyed
+    snapshots, which are the only ones that carry time_remaining.
+    """
+    res = array.get_protection_group_snapshots()
+    if res.status_code != 200:
+        return {}
+    return {snapshot.name: snapshot for snapshot in list(res.items)}
+
+
+def _pgroup_snaps_dict(array, protgroup, pgroup_snapshots):
+    """Build the snaps dict for one protection group
+
+    Merges each snapshot with its transfer record. Only a replicated snapshot
+    has a transfer record, so the snapshots are the source of truth for which
+    snapshots exist and the transfers only add the replication detail.
+    """
+    transfers = {}
+    res = array.get_protection_group_snapshots_transfer(names=[protgroup + ".*"])
+    if res.status_code == 200:
+        transfers = {transfer.name: transfer for transfer in list(res.items)}
+    names = set(transfers)
+    names.update(name for name in pgroup_snapshots if name.startswith(protgroup + "."))
+    snaps = {}
+    for name in sorted(names):
+        transfer = transfers.get(name)
+        snapshot = pgroup_snapshots.get(name)
+        # The transfer record says nothing about when a snapshot was taken or
+        # how long a destroyed one has left. Reading those two from the
+        # transfer is why they were null for every snapshot from 1.37.0
+        # onwards - see issue #1078.
+        destroyed = getattr(transfer, "destroyed", None)
+        if destroyed is None:
+            destroyed = getattr(snapshot, "destroyed", None)
+        snaps[name] = {
+            "time_remaining": getattr(snapshot, "time_remaining", None),
+            "created": getattr(snapshot, "created", None),
+            "started": getattr(transfer, "started", None),
+            "completed": getattr(transfer, "completed", None),
+            "physical_bytes_written": getattr(transfer, "physical_bytes_written", None),
+            "data_transferred": getattr(transfer, "data_transferred", None),
+            "progress": getattr(transfer, "progress", None),
+            "destroyed": destroyed,
+        }
+    return snaps
+
+
 def generate_del_pgroups_dict(array):
     pgroups_info = {}
     api_version = array.get_rest_version()
     pgroups = list(array.get_protection_groups(destroyed=True).items)
+    pgroup_snapshots = _pgroup_snapshots_by_name(array)
     for pgroup in pgroups:
         protgroup = pgroup.name
 
@@ -2110,29 +2164,9 @@ def generate_del_pgroups_dict(array):
             "is_local": getattr(pgroup, "is_local", True),
             "tags": [],
         }
-        pgroup_transfers_res = array.get_protection_group_snapshots_transfer(
-            names=[protgroup + ".*"]
+        pgroups_info[protgroup]["snaps"] = _pgroup_snaps_dict(
+            array, protgroup, pgroup_snapshots
         )
-        if pgroup_transfers_res.status_code == 200:
-            pgroup_transfers = list(pgroup_transfers_res.items)
-            for pgroup_transfer in pgroup_transfers:
-                snap = pgroup_transfer.name
-                pgroups_info[protgroup]["snaps"][snap] = {
-                    "time_remaining": None,  # Backwards compatibility
-                    "created": None,  # Backwards compatibility
-                    "started": getattr(pgroup_transfer, "started", None),
-                    "completed": getattr(pgroup_transfer, "completed", None),
-                    "physical_bytes_written": getattr(
-                        pgroup_transfer,
-                        "physical_bytes_written",
-                        None,
-                    ),
-                    "data_transferred": getattr(
-                        pgroup_transfer, "data_transferred", None
-                    ),
-                    "progress": getattr(pgroup_transfer, "progress", None),
-                    "destroyed": pgroup_transfer.destroyed,
-                }
         pgroup_volumes = list(
             array.get_protection_groups_volumes(group_names=[protgroup]).items
         )
@@ -2196,6 +2230,7 @@ def generate_pgroups_dict(array):
     pgroups_info = {}
     api_version = array.get_rest_version()
     pgroups = list(array.get_protection_groups(destroyed=False).items)
+    pgroup_snapshots = _pgroup_snapshots_by_name(array)
     for pgroup in pgroups:
         protgroup = pgroup.name
         pgroups_info[protgroup] = {
@@ -2235,29 +2270,9 @@ def generate_pgroups_dict(array):
             "is_local": getattr(pgroup, "is_local", True),
             "tags": [],
         }
-        pgroup_transfers_res = array.get_protection_group_snapshots_transfer(
-            names=[protgroup + ".*"]
+        pgroups_info[protgroup]["snaps"] = _pgroup_snaps_dict(
+            array, protgroup, pgroup_snapshots
         )
-        if pgroup_transfers_res.status_code == 200:
-            pgroup_transfers = list(pgroup_transfers_res.items)
-            for pgroup_transfer in pgroup_transfers:
-                snap = pgroup_transfer.name
-                pgroups_info[protgroup]["snaps"][snap] = {
-                    "time_remaining": None,  # Backwards compatibility
-                    "created": None,  # Backwards compatibility
-                    "started": getattr(pgroup_transfer, "started", None),
-                    "completed": getattr(pgroup_transfer, "completed", None),
-                    "physical_bytes_written": getattr(
-                        pgroup_transfer,
-                        "physical_bytes_written",
-                        None,
-                    ),
-                    "data_transferred": getattr(
-                        pgroup_transfer, "data_transferred", None
-                    ),
-                    "progress": getattr(pgroup_transfer, "progress", None),
-                    "destroyed": pgroup_transfer.destroyed,
-                }
         pgroup_volumes = list(
             array.get_protection_groups_volumes(group_names=[protgroup]).items
         )
