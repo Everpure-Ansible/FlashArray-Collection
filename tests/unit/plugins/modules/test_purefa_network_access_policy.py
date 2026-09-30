@@ -56,7 +56,6 @@ from plugins.modules.purefa_network_access_policy import (
     delete_policy,
 )
 
-
 MODULE_PATH = "plugins.modules.purefa_network_access_policy"
 
 
@@ -79,8 +78,9 @@ def _base_params(**overrides):
     return params
 
 
-def _rule_obj(name="restricted.1", effect="allow", client="*",
-              interfaces=None, index=1):
+def _rule_obj(
+    name="restricted.1", effect="allow", client="*", interfaces=None, index=1
+):
     """Build a mock rule object with the attributes update_policy inspects."""
     rule = Mock()
     rule.name = name
@@ -313,9 +313,7 @@ class TestCreatePolicy:
             pass
 
         mock_module.fail_json.assert_called_once()
-        assert (
-            "Failed to create" in mock_module.fail_json.call_args.kwargs["msg"]
-        )
+        assert "Failed to create" in mock_module.fail_json.call_args.kwargs["msg"]
 
 
 class TestUpdatePolicy:
@@ -369,9 +367,7 @@ class TestUpdatePolicy:
             pass
 
         mock_module.fail_json.assert_called_once()
-        assert (
-            "Failed to read" in mock_module.fail_json.call_args.kwargs["msg"]
-        )
+        assert "Failed to read" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.check_response")
     @patch(f"{MODULE_PATH}.PolicyrulenetworkaccesspatchRules")
@@ -391,8 +387,8 @@ class TestUpdatePolicy:
         policy_obj.enabled = True
         rule = _rule_obj(effect="allow")
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),   # policy fetch
-            Mock(status_code=200, items=[rule]),         # rule fetch
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[rule]),  # rule fetch
         ]
         mock_patch.return_value = Mock(status_code=200)
 
@@ -414,8 +410,8 @@ class TestUpdatePolicy:
         policy_obj = Mock()
         policy_obj.enabled = True
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),   # policy fetch
-            Mock(status_code=400, items=[]),             # rule fetch
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=400, items=[]),  # rule fetch
         ]
 
         try:
@@ -424,9 +420,7 @@ class TestUpdatePolicy:
             pass
 
         mock_module.fail_json.assert_called_once()
-        assert (
-            "not found" in mock_module.fail_json.call_args.kwargs["msg"]
-        )
+        assert "not found" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.check_response")
     @patch(f"{MODULE_PATH}.PolicyrulenetworkaccesspostRules")
@@ -452,8 +446,8 @@ class TestUpdatePolicy:
             interfaces=["management-ssh"],
         )
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),        # policy fetch
-            Mock(status_code=200, items=[existing_rule]),     # rules list
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[existing_rule]),  # rules list
         ]
         mock_post.return_value = Mock(status_code=200)
 
@@ -517,9 +511,9 @@ class TestUpdatePolicy:
         array_obj = Mock()
         array_obj.network_access_policy = None
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),       # policy fetch
-            Mock(status_code=200, items=[existing_rule]),    # rules-present check
-            Mock(status_code=200, items=[array_obj]),        # arrays fetch
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[existing_rule]),  # rules-present check
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch
         ]
         mock_patch.return_value = Mock(status_code=200)
 
@@ -538,8 +532,8 @@ class TestUpdatePolicy:
         policy_obj = Mock()
         policy_obj.enabled = True
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),   # policy fetch
-            Mock(status_code=200, items=[]),             # empty rules list
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[]),  # empty rules list
         ]
 
         try:
@@ -580,9 +574,9 @@ class TestDeletePolicy:
         mock_module.check_mode = True
         mock_module.params = _base_params()
         with patch(f"{MODULE_PATH}.get_with_context") as mock_get:
-            mock_get.return_value = Mock(status_code=200, items=[Mock(
-                network_access_policy=None
-            )])
+            mock_get.return_value = Mock(
+                status_code=200, items=[Mock(network_access_policy=None)]
+            )
             delete_policy(mock_module, Mock())
 
         mock_module.exit_json.assert_called_once_with(changed=True)
@@ -620,10 +614,7 @@ class TestDeletePolicy:
             pass
 
         mock_module.fail_json.assert_called_once()
-        assert (
-            "active array policy"
-            in mock_module.fail_json.call_args.kwargs["msg"]
-        )
+        assert "active array policy" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.delete_with_context")
     @patch(f"{MODULE_PATH}.get_with_context")
