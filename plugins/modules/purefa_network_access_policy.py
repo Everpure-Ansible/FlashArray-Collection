@@ -42,7 +42,8 @@ options:
   enabled:
     description:
     - Define if the policy is enabled or not.
-    - On create, defaults to C(true) when not specified.
+    - On create, defaults to C(false) when not specified so a new policy
+      is not enabled implicitly.
     - On update, an omitted value leaves the current enabled state
       unchanged so unrelated rule tasks do not re-enable a policy that
       was intentionally disabled.
@@ -304,7 +305,7 @@ def create_policy(module, array):
     if not module.check_mode:
         changed = False
         enabled = (
-            module.params["enabled"] if module.params["enabled"] is not None else True
+            module.params["enabled"] if module.params["enabled"] is not None else False
         )
         res = post_with_context(
             array,
