@@ -568,9 +568,7 @@ def update_policy(module, array):
             module,
             policy_names=[module.params["name"]],
         )
-        has_current_rules = (
-            rules_res.status_code == 200 and bool(list(rules_res.items))
-        )
+        has_current_rules = rules_res.status_code == 200 and bool(list(rules_res.items))
         will_have_rules = has_current_rules or (module.check_mode and changed_rule)
         if not will_have_rules:
             module.fail_json(
