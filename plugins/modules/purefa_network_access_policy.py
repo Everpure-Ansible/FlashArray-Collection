@@ -26,7 +26,7 @@ description:
 - Only one policy can be active array-wide at a time. The default policy allows
   all access. If no rule matches, access is blocked.
 author:
-- Pure Storage Ansible Team (@avk) <pure-ansible-team@everpuredata.com>
+- Everpure Ansible Team (@avk) <pure-ansible-team@everpuredata.com>
 options:
   name:
     description:
