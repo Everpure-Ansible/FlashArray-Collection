@@ -149,6 +149,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_messages - list FlashArray alert messages
 - purefa_metrics - collect OpenMetrics data from the FlashArray
 - purefa_network - manage the physical and virtual network settings on the FlashArray
+- purefa_network_access_policy - manage FlashArray network-access policies
 - purefa_ntp - manage the NTP settings on the FlashArray
 - purefa_offload - manage the offload targets for a FlashArray
 - purefa_pg - manage protection groups on the FlashArray
