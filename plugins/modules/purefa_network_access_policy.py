@@ -17,7 +17,7 @@ ANSIBLE_METADATA = {
 DOCUMENTATION = r"""
 ---
 module: purefa_network_access_policy
-version_added: '1.41.0'
+version_added: '1.46.0'
 short_description: Manage FlashArray Network Access Policies
 description:
 - Manage FlashArray network-access policies introduced with Purity//FA 6.10.5
