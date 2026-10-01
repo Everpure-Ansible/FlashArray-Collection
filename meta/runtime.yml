@@ -70,6 +70,7 @@ action_groups:
     - purefa_tags
     - purefa_tgroup
     - purefa_timeout
+    - purefa_tls_policy
     - purefa_token
     - purefa_user
     - purefa_vg
