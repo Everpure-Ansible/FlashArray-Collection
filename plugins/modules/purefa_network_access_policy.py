@@ -580,11 +580,11 @@ def update_policy(module, array):
             if module.params["enabled"] is not None
             else current_enabled
         )
-        # if not effective_enabled:
-        #     module.fail_json(
-        #         msg=f"Cannot activate network-access policy {module.params['name']} "
-        #         "because it is disabled. Set enabled: true to enable and activate it."
-        #     )
+        if not effective_enabled:
+            module.fail_json(
+                msg=f"Cannot activate network-access policy {module.params['name']} "
+                "because it is disabled. Set enabled: true to enable and activate it."
+            )
 
         rules_res = get_with_context(
             array,
