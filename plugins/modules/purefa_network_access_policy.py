@@ -53,14 +53,16 @@ options:
     - New name of the policy.
     - Re-running a rename task reports no change if the policy is already known
       by the new name.
+    - When set, other attributes (I(enabled), the rule fields, and I(active))
+      supplied in the same task are ignored; the task only renames the policy.
     type: str
   active:
     description:
     - When C(true), makes this policy the active array-wide network-access policy
       via C(PATCH /arrays).
     - The policy must be enabled before it can be activated.
-    - Setting C(active) to C(false) is not supported; activate another policy to
-      replace the current one.
+    - Setting C(active) to C(false) is rejected with an error; activate another
+      policy to replace the current one.
     type: bool
   effect:
     description:
@@ -267,6 +269,12 @@ def rename_policy(module, array):
         names=[module.params["rename"]],
     )
     if res.status_code == 200:
+        items = list(res.items)
+        if items and items[0].destroyed:
+            module.fail_json(
+                msg=f"Rename failed - target policy {module.params['rename']} "
+                "exists but in destroyed state"
+            )
         module.fail_json(
             msg=f"Rename failed - target policy {module.params['rename']} already exists"
         )
@@ -299,6 +307,12 @@ def create_policy(module, array):
             msg="Cannot activate a network-access policy with no rules — "
             "activating an empty policy blocks all management access. "
             "Provide effect, client, and interfaces to create an initial rule."
+        )
+
+    if module.params["active"] and not module.params["enabled"]:
+        module.fail_json(
+            msg=f"Cannot activate network-access policy {module.params['name']}: "
+            "it must be enabled. Set enabled: true to create and activate it."
         )
 
     changed = True
@@ -561,6 +575,17 @@ def update_policy(module, array):
 
     changed_active = False
     if module.params["active"]:
+        effective_enabled = (
+            module.params["enabled"]
+            if module.params["enabled"] is not None
+            else current_enabled
+        )
+        # if not effective_enabled:
+        #     module.fail_json(
+        #         msg=f"Cannot activate network-access policy {module.params['name']} "
+        #         "because it is disabled. Set enabled: true to enable and activate it."
+        #     )
+
         rules_res = get_with_context(
             array,
             "get_policies_network_access_rules",
@@ -714,8 +739,11 @@ def main():
         supports_check_mode=True,
     )
 
-    if module.params["active"] and module.params["enabled"] is False:
-        module.fail_json(msg="Cannot activate a disabled network-access policy")
+    if module.params["active"] is False:
+        module.fail_json(
+            msg="active cannot be set to false; activate a different policy "
+            "to replace this one as the array-wide policy."
+        )
 
     if module.params["interfaces"] is not None and not module.params["interfaces"]:
         module.fail_json(

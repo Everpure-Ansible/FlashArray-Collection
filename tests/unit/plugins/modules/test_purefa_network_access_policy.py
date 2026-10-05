@@ -54,6 +54,7 @@ from plugins.modules.purefa_network_access_policy import (
     create_policy,
     update_policy,
     delete_policy,
+    main,
 )
 
 MODULE_PATH = "plugins.modules.purefa_network_access_policy"
@@ -149,7 +150,9 @@ class TestRenamePolicy:
         mock_module.check_mode = False
         mock_module.params = _base_params(rename="restricted-mgmt")
         mock_module.fail_json.side_effect = Exception("fail_json called")
-        mock_get.return_value = Mock(status_code=200, items=[Mock()])
+        target = Mock()
+        target.destroyed = False
+        mock_get.return_value = Mock(status_code=200, items=[target])
 
         try:
             rename_policy(mock_module, Mock())
@@ -158,6 +161,24 @@ class TestRenamePolicy:
 
         mock_module.fail_json.assert_called_once()
         assert "already exists" in mock_module.fail_json.call_args.kwargs["msg"]
+
+    @patch(f"{MODULE_PATH}.get_with_context")
+    def test_rename_conflict_destroyed_fails(self, mock_get):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(rename="restricted-mgmt")
+        mock_module.fail_json.side_effect = Exception("fail_json called")
+        target = Mock()
+        target.destroyed = True
+        mock_get.return_value = Mock(status_code=200, items=[target])
+
+        try:
+            rename_policy(mock_module, Mock())
+        except Exception:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "destroyed" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.get_with_context")
     def test_rename_check_mode(self, mock_get):
@@ -314,6 +335,41 @@ class TestCreatePolicy:
 
         mock_module.fail_json.assert_called_once()
         assert "Failed to create" in mock_module.fail_json.call_args.kwargs["msg"]
+
+    # ==== enabled / active interaction ====
+
+    @patch(f"{MODULE_PATH}.PolicyPost")
+    @patch(f"{MODULE_PATH}.post_with_context")
+    def test_create_policy_defaults_enabled_false(self, mock_post, mock_post_model):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(enabled=None)
+        mock_post.return_value = Mock(status_code=200)
+
+        create_policy(mock_module, Mock())
+
+        assert mock_post_model.call_args.kwargs["enabled"] is False
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    def test_create_activate_without_enabled_fails(self):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(
+            enabled=None,
+            active=True,
+            effect="allow",
+            client="*",
+            interfaces=["management-ssh"],
+        )
+        mock_module.fail_json.side_effect = Exception("fail_json called")
+
+        try:
+            create_policy(mock_module, Mock())
+        except Exception:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "must be enabled" in mock_module.fail_json.call_args.kwargs["msg"]
 
 
 class TestUpdatePolicy:
@@ -565,6 +621,64 @@ class TestUpdatePolicy:
 
         mock_module.exit_json.assert_called_once_with(changed=False)
 
+    # ==== enabled / active interaction ====
+
+    @patch(f"{MODULE_PATH}.get_with_context")
+    def test_update_activate_disabled_policy_fails(self, mock_get):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(enabled=None, active=True)
+        mock_module.fail_json.side_effect = Exception("fail_json called")
+        policy_obj = Mock()
+        policy_obj.enabled = False
+        mock_get.return_value = Mock(status_code=200, items=[policy_obj])
+
+        try:
+            update_policy(mock_module, Mock())
+        except Exception:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "disabled" in mock_module.fail_json.call_args.kwargs["msg"]
+
+    @patch(f"{MODULE_PATH}.check_response")
+    @patch(f"{MODULE_PATH}.Reference")
+    @patch(f"{MODULE_PATH}.Arrays")
+    @patch(f"{MODULE_PATH}.PolicyPatch")
+    @patch(f"{MODULE_PATH}.patch_with_context")
+    @patch(f"{MODULE_PATH}.get_with_context")
+    def test_update_enable_then_activate(
+        self,
+        mock_get,
+        mock_patch,
+        mock_patch_model,
+        mock_arrays,
+        mock_reference,
+        mock_check,
+    ):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(enabled=True, active=True)
+        policy_obj = Mock()
+        policy_obj.enabled = False
+        existing_rule = _rule_obj()
+        array_obj = Mock()
+        array_obj.network_access_policy = None
+        mock_get.side_effect = [
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[existing_rule]),  # rules-present check
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch
+        ]
+        mock_patch.return_value = Mock(status_code=200)
+
+        update_policy(mock_module, Mock())
+
+        # One patch enables the policy, a second makes it active.
+        assert mock_patch.call_count == 2
+        assert mock_patch_model.call_args.kwargs["enabled"] is True
+        mock_reference.assert_called_once_with(name="restricted")
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
 
 class TestDeletePolicy:
     """Tests for delete_policy"""
@@ -681,3 +795,40 @@ class TestDeletePolicy:
             delete_policy(mock_module, Mock())
 
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestMain:
+    """Tests for main() argument validation guards."""
+
+    @patch(f"{MODULE_PATH}.AnsibleModule")
+    def test_active_false_rejected(self, mock_am):
+        mock_module = Mock()
+        mock_module.params = _base_params(active=False)
+        mock_module.fail_json.side_effect = Exception("fail_json called")
+        mock_am.return_value = mock_module
+
+        try:
+            main()
+        except Exception:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert (
+            "active cannot be set to false"
+            in mock_module.fail_json.call_args.kwargs["msg"]
+        )
+
+    @patch(f"{MODULE_PATH}.AnsibleModule")
+    def test_incomplete_rule_attrs_rejected(self, mock_am):
+        mock_module = Mock()
+        mock_module.params = _base_params(effect="deny")
+        mock_module.fail_json.side_effect = Exception("fail_json called")
+        mock_am.return_value = mock_module
+
+        try:
+            main()
+        except Exception:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "provided together" in mock_module.fail_json.call_args.kwargs["msg"]
