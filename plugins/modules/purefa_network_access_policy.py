@@ -202,7 +202,7 @@ try:
         PolicyPost,
         PolicyPatch,
         Arrays,
-        Reference,
+        ReferenceWithType,
         PolicyRuleNetworkAccessPost,
         PolicyrulenetworkaccesspostRules,
         PolicyRuleNetworkAccessPatch,
@@ -229,6 +229,7 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
 
 MIN_REQUIRED_API_VERSION = "2.52"
 CONTEXT_VERSION = "2.38"
+NETWORK_ACCESS_RESOURCE_TYPE = "policies/network-access"
 
 
 def check_renamed_policy(module, array):
@@ -366,7 +367,10 @@ def create_policy(module, array):
                     CONTEXT_VERSION,
                     module,
                     array=Arrays(
-                        network_access_policy=Reference(name=module.params["name"])
+                        network_access_policy=ReferenceWithType(
+                            name=module.params["name"],
+                            resource_type=NETWORK_ACCESS_RESOURCE_TYPE,
+                        )
                     ),
                 )
                 check_response(
@@ -408,6 +412,26 @@ def update_policy(module, array):
         module.params["enabled"] is not None
         and current_enabled != module.params["enabled"]
     ):
+        if module.params["enabled"] is False:
+            arr_res = get_with_context(
+                array,
+                "get_arrays",
+                CONTEXT_VERSION,
+                module,
+            )
+            if arr_res.status_code == 200:
+                arr_items = list(arr_res.items)
+                if arr_items:
+                    active_policy = getattr(arr_items[0], "network_access_policy", None)
+                    if (
+                        active_policy
+                        and getattr(active_policy, "name", None)
+                        == module.params["name"]
+                    ):
+                        module.fail_json(
+                            msg=f"Cannot disable network-access policy {module.params['name']} "
+                            f"because it is the active array policy. Activate another policy first."
+                        )
         changed_enable = True
         if not module.check_mode:
             res = patch_with_context(
@@ -627,7 +651,10 @@ def update_policy(module, array):
                     CONTEXT_VERSION,
                     module,
                     array=Arrays(
-                        network_access_policy=Reference(name=module.params["name"])
+                        network_access_policy=ReferenceWithType(
+                            name=module.params["name"],
+                            resource_type=NETWORK_ACCESS_RESOURCE_TYPE,
+                        )
                     ),
                 )
                 check_response(

@@ -281,7 +281,7 @@ class TestCreatePolicy:
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch(f"{MODULE_PATH}.check_response")
-    @patch(f"{MODULE_PATH}.Reference")
+    @patch(f"{MODULE_PATH}.ReferenceWithType")
     @patch(f"{MODULE_PATH}.Arrays")
     @patch(f"{MODULE_PATH}.PolicyrulenetworkaccesspostRules")
     @patch(f"{MODULE_PATH}.PolicyRuleNetworkAccessPost")
@@ -314,7 +314,9 @@ class TestCreatePolicy:
 
         assert mock_post.call_count == 2
         mock_patch.assert_called_once()
-        mock_reference.assert_called_once_with(name="restricted")
+        mock_reference.assert_called_once_with(
+            name="restricted", resource_type="policies/network-access"
+        )
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch(f"{MODULE_PATH}.PolicyPost")
@@ -551,7 +553,7 @@ class TestUpdatePolicy:
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch(f"{MODULE_PATH}.check_response")
-    @patch(f"{MODULE_PATH}.Reference")
+    @patch(f"{MODULE_PATH}.ReferenceWithType")
     @patch(f"{MODULE_PATH}.Arrays")
     @patch(f"{MODULE_PATH}.patch_with_context")
     @patch(f"{MODULE_PATH}.get_with_context")
@@ -569,15 +571,38 @@ class TestUpdatePolicy:
         mock_get.side_effect = [
             Mock(status_code=200, items=[policy_obj]),  # policy fetch
             Mock(status_code=200, items=[existing_rule]),  # rules-present check
-            Mock(status_code=200, items=[array_obj]),  # arrays fetch
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch (not active)
         ]
         mock_patch.return_value = Mock(status_code=200)
 
         update_policy(mock_module, Mock())
 
         mock_patch.assert_called_once()
-        mock_reference.assert_called_once_with(name="restricted")
+        mock_reference.assert_called_once_with(
+            name="restricted", resource_type="policies/network-access"
+        )
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch(f"{MODULE_PATH}.get_with_context")
+    def test_update_activate_already_active_no_change(self, mock_get):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = _base_params(active=True)
+        policy_obj = Mock()
+        policy_obj.enabled = True
+        existing_rule = _rule_obj()
+        array_obj = Mock()
+        array_obj.network_access_policy = Mock()
+        array_obj.network_access_policy.name = "restricted"
+        mock_get.side_effect = [
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[existing_rule]),  # rules-present check
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch (already active)
+        ]
+
+        update_policy(mock_module, Mock())
+
+        mock_module.exit_json.assert_called_once_with(changed=False)
 
     @patch(f"{MODULE_PATH}.get_with_context")
     def test_update_activate_with_no_rules_fails(self, mock_get):
@@ -600,28 +625,31 @@ class TestUpdatePolicy:
         mock_module.fail_json.assert_called_once()
         assert "no rules" in mock_module.fail_json.call_args.kwargs["msg"]
 
+    # ==== enabled / active interaction ====
+
     @patch(f"{MODULE_PATH}.get_with_context")
-    def test_update_activate_already_active_no_change(self, mock_get):
+    def test_update_disable_active_policy_fails(self, mock_get):
         mock_module = Mock()
         mock_module.check_mode = False
-        mock_module.params = _base_params(active=True)
+        mock_module.params = _base_params(enabled=False)
+        mock_module.fail_json.side_effect = Exception("fail_json called")
         policy_obj = Mock()
         policy_obj.enabled = True
-        existing_rule = _rule_obj()
         array_obj = Mock()
         array_obj.network_access_policy = Mock()
         array_obj.network_access_policy.name = "restricted"
         mock_get.side_effect = [
-            Mock(status_code=200, items=[policy_obj]),
-            Mock(status_code=200, items=[existing_rule]),
-            Mock(status_code=200, items=[array_obj]),
+            Mock(status_code=200, items=[policy_obj]),  # policy fetch
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch
         ]
 
-        update_policy(mock_module, Mock())
+        try:
+            update_policy(mock_module, Mock())
+        except Exception:
+            pass
 
-        mock_module.exit_json.assert_called_once_with(changed=False)
-
-    # ==== enabled / active interaction ====
+        mock_module.fail_json.assert_called_once()
+        assert "active array policy" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.get_with_context")
     def test_update_activate_disabled_policy_fails(self, mock_get):
@@ -642,7 +670,7 @@ class TestUpdatePolicy:
         assert "disabled" in mock_module.fail_json.call_args.kwargs["msg"]
 
     @patch(f"{MODULE_PATH}.check_response")
-    @patch(f"{MODULE_PATH}.Reference")
+    @patch(f"{MODULE_PATH}.ReferenceWithType")
     @patch(f"{MODULE_PATH}.Arrays")
     @patch(f"{MODULE_PATH}.PolicyPatch")
     @patch(f"{MODULE_PATH}.patch_with_context")
@@ -667,7 +695,7 @@ class TestUpdatePolicy:
         mock_get.side_effect = [
             Mock(status_code=200, items=[policy_obj]),  # policy fetch
             Mock(status_code=200, items=[existing_rule]),  # rules-present check
-            Mock(status_code=200, items=[array_obj]),  # arrays fetch
+            Mock(status_code=200, items=[array_obj]),  # arrays fetch (not active)
         ]
         mock_patch.return_value = Mock(status_code=200)
 
@@ -676,7 +704,9 @@ class TestUpdatePolicy:
         # One patch enables the policy, a second makes it active.
         assert mock_patch.call_count == 2
         assert mock_patch_model.call_args.kwargs["enabled"] is True
-        mock_reference.assert_called_once_with(name="restricted")
+        mock_reference.assert_called_once_with(
+            name="restricted", resource_type="policies/network-access"
+        )
         mock_module.exit_json.assert_called_once_with(changed=True)
 
 
