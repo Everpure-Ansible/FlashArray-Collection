@@ -41,6 +41,7 @@ action_groups:
     - purefa_messages
     - purefa_metrics
     - purefa_network
+    - purefa_network_access_policy
     - purefa_ntp
     - purefa_offload
     - purefa_pg
