@@ -93,6 +93,9 @@ options:
       not forced to negotiate TLS by this policy.
     - Only C(nfs) is valid in this release. Values are matched case-insensitively.
     - Use an empty list to stop enforcing TLS for any protocol.
+    - Enforcement takes effect only when the policy is attached to a file server
+      (see I(servers)); at that point existing plaintext clients of the protocol
+      stop connecting until they switch to TLS.
     type: list
     elements: str
   client_certificates_required:
@@ -252,7 +255,10 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.purefa import 
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
     check_api_version,
     check_response,
+    delete_with_context,
     get_with_context,
+    patch_with_context,
+    post_with_context,
 )
 
 # TLS policies, their attributes and the server-policy attachment all arrived
@@ -366,7 +372,7 @@ def _validate_attachable(module, array, servers):
 
 def _attach_server(module, array, server):
     """Attach this policy to a file server"""
-    res = get_with_context(
+    res = post_with_context(
         array,
         "post_servers_policies_tls",
         MIN_API_VERSION_TLS_SERVER_POLICY,
@@ -389,7 +395,7 @@ def _attach_server(module, array, server):
 
 def _detach_server(module, array, server):
     """Detach this policy from a file server"""
-    res = get_with_context(
+    res = delete_with_context(
         array,
         "delete_servers_policies_tls",
         MIN_API_VERSION_TLS_SERVER_POLICY,
@@ -484,7 +490,7 @@ def create_policy(module, array):
     if module.params["servers"]:
         _validate_attachable(module, array, module.params["servers"])
     if not module.check_mode:
-        res = get_with_context(
+        res = post_with_context(
             array,
             "post_policies_tls",
             MIN_API_VERSION_TLS_POLICY,
@@ -568,14 +574,10 @@ def update_policy(module, array, policy):
                 name=module.params["trusted_client_certificate_authority"]
             )
 
-    if module.params["servers"] is not None:
-        if _reconcile_servers(module, array):
-            changed = True
-
     if patch:
         changed = True
         if not module.check_mode:
-            res = get_with_context(
+            res = patch_with_context(
                 array,
                 "patch_policies_tls",
                 MIN_API_VERSION_TLS_POLICY,
@@ -589,6 +591,9 @@ def update_policy(module, array, policy):
                 "Failed to update TLS policy {0}".format(module.params["name"]),
             )
 
+    if _reconcile_servers(module, array):
+        changed = True
+
     module.exit_json(changed=changed)
 
 
@@ -600,7 +605,7 @@ def rename_policy(module, array):
             msg="Target TLS policy {0} already exists".format(module.params["rename"])
         )
     if not module.check_mode:
-        res = get_with_context(
+        res = patch_with_context(
             array,
             "patch_policies_tls",
             MIN_API_VERSION_TLS_POLICY,
@@ -630,7 +635,7 @@ def delete_policy(module, array):
             )
         )
     if not module.check_mode:
-        res = get_with_context(
+        res = delete_with_context(
             array,
             "delete_policies_tls",
             MIN_API_VERSION_TLS_POLICY,

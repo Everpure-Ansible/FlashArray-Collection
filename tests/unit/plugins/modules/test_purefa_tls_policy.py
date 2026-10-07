@@ -246,16 +246,18 @@ class TestCreatePolicy:
         mock_get_with_context.assert_not_called()
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
-    @patch("plugins.modules.purefa_tls_policy.get_with_context")
-    def test_creates_with_certificate(self, mock_get_with_context, mock_check_response):
+    @patch("plugins.modules.purefa_tls_policy.post_with_context")
+    def test_creates_with_certificate(
+        self, mock_post_with_context, mock_check_response
+    ):
         module = Mock()
         module.check_mode = False
         module.params = _params(appliance_certificate="cert1")
-        mock_get_with_context.return_value = Mock(status_code=200)
+        mock_post_with_context.return_value = Mock(status_code=200)
 
         create_policy(module, Mock())
 
-        call = mock_get_with_context.call_args
+        call = mock_post_with_context.call_args
         assert call[0][1] == "post_policies_tls"
         assert call[1]["names"] == ["nfs_tls"]
         module.exit_json.assert_called_once_with(changed=True)
@@ -275,9 +277,10 @@ class TestCreatePolicy:
         module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
+    @patch("plugins.modules.purefa_tls_policy.post_with_context")
     @patch("plugins.modules.purefa_tls_policy.get_with_context")
     def test_create_with_servers_validates_then_attaches(
-        self, mock_get_with_context, mock_check_response
+        self, mock_get_with_context, mock_post_with_context, mock_check_response
     ):
         module = Mock()
         module.check_mode = False
@@ -285,19 +288,18 @@ class TestCreatePolicy:
         mock_get_with_context.side_effect = [
             Mock(status_code=200, items=[_ref("s1")]),  # server exists
             Mock(status_code=200, items=[]),  # no conflicting policy
+        ]
+        mock_post_with_context.side_effect = [
             Mock(status_code=200),  # create
             Mock(status_code=200),  # attach
         ]
 
         create_policy(module, Mock())
 
-        methods = [c[0][1] for c in mock_get_with_context.call_args_list]
-        assert methods == [
-            "get_servers",
-            "get_servers_policies_tls",
-            "post_policies_tls",
-            "post_servers_policies_tls",
-        ]
+        reads = [c[0][1] for c in mock_get_with_context.call_args_list]
+        writes = [c[0][1] for c in mock_post_with_context.call_args_list]
+        assert reads == ["get_servers", "get_servers_policies_tls"]
+        assert writes == ["post_policies_tls", "post_servers_policies_tls"]
         module.exit_json.assert_called_once_with(changed=True)
 
 
@@ -320,30 +322,30 @@ class TestUpdatePolicy:
         module.exit_json.assert_called_once_with(changed=False)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
-    @patch("plugins.modules.purefa_tls_policy.get_with_context")
+    @patch("plugins.modules.purefa_tls_policy.patch_with_context")
     def test_min_tls_version_change_is_patched(
-        self, mock_get_with_context, mock_check_response
+        self, mock_patch_with_context, mock_check_response
     ):
         module = Mock()
         module.check_mode = False
         module.params = _params(min_tls_version="1.3")
-        mock_get_with_context.return_value = Mock(status_code=200)
+        mock_patch_with_context.return_value = Mock(status_code=200)
 
         update_policy(module, Mock(), FakePolicy(min_tls_version="1.2"))
 
-        call = mock_get_with_context.call_args
+        call = mock_patch_with_context.call_args
         assert call[0][1] == "patch_policies_tls"
         module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
-    @patch("plugins.modules.purefa_tls_policy.get_with_context")
+    @patch("plugins.modules.purefa_tls_policy.patch_with_context")
     def test_disabling_an_enabled_policy_is_patched(
-        self, mock_get_with_context, mock_check_response
+        self, mock_patch_with_context, mock_check_response
     ):
         module = Mock()
         module.check_mode = False
         module.params = _params(enabled=False)
-        mock_get_with_context.return_value = Mock(status_code=200)
+        mock_patch_with_context.return_value = Mock(status_code=200)
 
         update_policy(module, Mock(), FakePolicy(enabled=True))
 
@@ -365,14 +367,14 @@ class TestUpdatePolicy:
         module.exit_json.assert_called_once_with(changed=False)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
-    @patch("plugins.modules.purefa_tls_policy.get_with_context")
+    @patch("plugins.modules.purefa_tls_policy.patch_with_context")
     def test_empty_string_clears_trusted_ca(
-        self, mock_get_with_context, mock_check_response
+        self, mock_patch_with_context, mock_check_response
     ):
         module = Mock()
         module.check_mode = False
         module.params = _params(trusted_client_certificate_authority="")
-        mock_get_with_context.return_value = Mock(status_code=200)
+        mock_patch_with_context.return_value = Mock(status_code=200)
 
         policy = FakePolicy(trusted_client_certificate_authority=_ref("old_ca"))
         update_policy(module, Mock(), policy)
@@ -381,15 +383,15 @@ class TestUpdatePolicy:
 
     @patch("plugins.modules.purefa_tls_policy.PolicyTlsPatch")
     @patch("plugins.modules.purefa_tls_policy.check_response")
-    @patch("plugins.modules.purefa_tls_policy.get_with_context")
+    @patch("plugins.modules.purefa_tls_policy.patch_with_context")
     def test_omitting_trusted_ca_leaves_it_alone(
-        self, mock_get_with_context, mock_check_response, mock_patch_model
+        self, mock_patch_with_context, mock_check_response, mock_patch_model
     ):
         """A task that does not mention the CA must not touch it"""
         module = Mock()
         module.check_mode = False
         module.params = _params(min_tls_version="1.3")
-        mock_get_with_context.return_value = Mock(status_code=200)
+        mock_patch_with_context.return_value = Mock(status_code=200)
 
         policy = FakePolicy(
             min_tls_version="1.2",
@@ -421,19 +423,22 @@ class TestRenamePolicy:
     """Test cases for rename_policy"""
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
+    @patch("plugins.modules.purefa_tls_policy.patch_with_context")
     @patch("plugins.modules.purefa_tls_policy.get_with_context")
-    def test_rename_success(self, mock_get_with_context, mock_check_response):
+    def test_rename_success(
+        self, mock_get_with_context, mock_patch_with_context, mock_check_response
+    ):
         module = Mock()
         module.check_mode = False
         module.params = _params(rename="nfs_tls_v2")
-        mock_get_with_context.side_effect = [
-            Mock(status_code=200, items=[]),  # target does not exist
-            Mock(status_code=200),  # patch
-        ]
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[]
+        )  # target does not exist
+        mock_patch_with_context.return_value = Mock(status_code=200)  # patch
 
         rename_policy(module, Mock())
 
-        assert mock_get_with_context.call_args_list[1][0][1] == "patch_policies_tls"
+        assert mock_patch_with_context.call_args[0][1] == "patch_policies_tls"
         module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
@@ -462,19 +467,22 @@ class TestDeletePolicy:
     """Test cases for delete_policy"""
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
+    @patch("plugins.modules.purefa_tls_policy.delete_with_context")
     @patch("plugins.modules.purefa_tls_policy.get_with_context")
-    def test_delete_unattached_policy(self, mock_get_with_context, mock_check_response):
+    def test_delete_unattached_policy(
+        self, mock_get_with_context, mock_delete_with_context, mock_check_response
+    ):
         module = Mock()
         module.check_mode = False
         module.params = _params(state="absent")
-        mock_get_with_context.side_effect = [
-            Mock(status_code=200, items=[]),  # no attachments
-            Mock(status_code=200),  # delete
-        ]
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[]
+        )  # no attachments
+        mock_delete_with_context.return_value = Mock(status_code=200)  # delete
 
         delete_policy(module, Mock())
 
-        assert mock_get_with_context.call_args_list[1][0][1] == "delete_policies_tls"
+        assert mock_delete_with_context.call_args[0][1] == "delete_policies_tls"
         module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
@@ -534,8 +542,11 @@ class TestReconcileServers:
         mock_get_with_context.assert_not_called()
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
+    @patch("plugins.modules.purefa_tls_policy.post_with_context")
     @patch("plugins.modules.purefa_tls_policy.get_with_context")
-    def test_attaches_what_is_missing(self, mock_get_with_context, mock_check_response):
+    def test_attaches_what_is_missing(
+        self, mock_get_with_context, mock_post_with_context, mock_check_response
+    ):
         module = Mock()
         module.check_mode = False
         module.params = _params(servers=["s1", "s2"])
@@ -545,33 +556,32 @@ class TestReconcileServers:
             ),
             Mock(status_code=200, items=[_ref("s2")]),  # s2 exists
             Mock(status_code=200, items=[]),  # s2 has no policy
-            Mock(status_code=200),  # attach s2
         ]
+        mock_post_with_context.return_value = Mock(status_code=200)  # attach s2
 
         assert _reconcile_servers(module, Mock()) is True
 
-        attach = mock_get_with_context.call_args_list[-1]
+        attach = mock_post_with_context.call_args_list[-1]
         assert attach[0][1] == "post_servers_policies_tls"
         assert attach[1]["member_names"] == ["s2"]
 
     @patch("plugins.modules.purefa_tls_policy.check_response")
+    @patch("plugins.modules.purefa_tls_policy.delete_with_context")
     @patch("plugins.modules.purefa_tls_policy.get_with_context")
     def test_detaches_what_is_no_longer_listed(
-        self, mock_get_with_context, mock_check_response
+        self, mock_get_with_context, mock_delete_with_context, mock_check_response
     ):
         module = Mock()
         module.check_mode = False
         module.params = _params(servers=[])
-        mock_get_with_context.side_effect = [
-            Mock(
-                status_code=200, items=[FakeMembership(server="s1", policy="nfs_tls")]
-            ),
-            Mock(status_code=200),  # detach s1
-        ]
+        mock_get_with_context.return_value = Mock(
+            status_code=200, items=[FakeMembership(server="s1", policy="nfs_tls")]
+        )
+        mock_delete_with_context.return_value = Mock(status_code=200)  # detach s1
 
         assert _reconcile_servers(module, Mock()) is True
 
-        detach = mock_get_with_context.call_args_list[-1]
+        detach = mock_delete_with_context.call_args_list[-1]
         assert detach[0][1] == "delete_servers_policies_tls"
         assert detach[1]["member_names"] == ["s1"]
 
