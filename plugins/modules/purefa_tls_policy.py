@@ -75,6 +75,11 @@ options:
     - When supplied, only these ciphers will be enabled.
     - The literal value C(default) lets the array manage the enabled ciphers and
       adjust them across software upgrades.
+    - Cipher names are validated by the array. When ciphers are listed and
+      I(min_tls_version) is C(1.3), the array requires C(TLS_AES_128_GCM_SHA256)
+      to be among them.
+    - When I(min_tls_version) is C(default) and ciphers are listed, the list must
+      also include TLS 1.2 ciphers; a TLS 1.3 only list is rejected.
     type: list
     elements: str
   disabled_tls_ciphers:
@@ -106,6 +111,8 @@ options:
     description:
     - Name of the certificate used to verify certificates presented by clients
       when I(verify_client_certificate_trust) is C(true).
+    - Must name an external certificate. An appliance certificate is rejected by
+      the array.
     - Set to an empty string (C("")) to clear a previously assigned trusted CA
       reference. This only applies on update; on create an empty string is
       treated the same as omitting the parameter.
@@ -116,7 +123,12 @@ options:
     - Declarative. File servers in the list that are not attached to this policy
       are attached, and servers attached to this policy that are not in the list
       are detached. An empty list detaches the policy from all servers.
-    - Omit the option to leave the policy's server attachments alone.
+    - Omit the option to leave the policy's server attachments alone. Server
+      attachments change only when this option is named explicitly.
+    - Attaching a policy that enforces TLS (see I(tls_enforced_for)) forces TLS
+      on the affected protocol across all of the server's VIFs the moment the
+      task runs, so existing plaintext clients stop connecting until they switch
+      to TLS.
     - A file server has at most one TLS policy. Attaching this policy to a server
       that already has a different one fails; detach the existing policy first.
     - A TLS policy cannot be attached to a file server that has S3 VIFs.
@@ -147,6 +159,7 @@ EXAMPLES = r"""
     enabled_tls_ciphers:
       - TLS_AES_256_GCM_SHA384
       - TLS_CHACHA20_POLY1305_SHA256
+      - TLS_AES_128_GCM_SHA256
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
 
