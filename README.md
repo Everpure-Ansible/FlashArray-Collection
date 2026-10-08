@@ -178,6 +178,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_tags - manage tags on FlashArray resources
 - purefa_tgroup - manage topology groups and their memberships on the FlashArray
 - purefa_timeout - manage the GUI idle timeout on the FlashArray
+- purefa_tls_policy - manage FlashArray TLS policies and their file-server attachments
 - purefa_token - manage FlashArray user API tokens
 - purefa_user - manage local user accounts on the FlashArray
 - purefa_vg - manage volume groups on the FlashArray
