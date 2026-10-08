@@ -53,6 +53,7 @@ action_groups:
     - purefa_policy
     - purefa_policy_management_access
     - purefa_proxy
+    - purefa_qos_policy
     - purefa_ra
     - purefa_realm
     - purefa_saml
