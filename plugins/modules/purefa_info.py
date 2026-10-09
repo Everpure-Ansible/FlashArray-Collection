@@ -125,6 +125,9 @@ CONTEXT_API_VERSION = "2.38"
 QUOTA_API_VERSION = "2.42"
 TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
+# Policy realms report on every policy type, not just the one that first
+# surfaced the gap (QoS)
+POLICY_REALMS_API_VERSION = "2.55"
 # The support and software read endpoints each arrived separately
 SOFTWARE_STEPS_API_VERSION = "2.2"
 SOFTWARE_VERSIONS_API_VERSION = "2.9"
@@ -853,6 +856,61 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 "min_characters_per_group": pwd_policy.min_characters_per_group,
                 "min_password_length": pwd_policy.min_password_length,
             }
+        if policy.policy_type == "qos":
+            qos_policy = list(array.get_policies_qos(names=[p_name]).items)[0]
+            policy_info[p_name] |= {
+                "max_total_bytes_per_sec": getattr(
+                    qos_policy, "max_total_bytes_per_sec", None
+                ),
+                "max_total_ops_per_sec": getattr(
+                    qos_policy, "max_total_ops_per_sec", None
+                ),
+                "pod": getattr(getattr(qos_policy, "pod", None), "name", None),
+            }
+            if LooseVersion(POLICY_REALMS_API_VERSION) <= LooseVersion(
+                array.get_rest_version()
+            ):
+                policy_info[p_name]["realms"] = [
+                    getattr(realm, "name", None)
+                    for realm in getattr(qos_policy, "realms", None) or []
+                ]
+        if policy.policy_type == "tls":
+            tls_policy = list(array.get_policies_tls(names=[p_name]).items)[0]
+            policy_info[p_name] |= {
+                "appliance_certificate": getattr(
+                    getattr(tls_policy, "appliance_certificate", None), "name", None
+                ),
+                "client_certificates_required": getattr(
+                    tls_policy, "client_certificates_required", None
+                ),
+                "disabled_tls_ciphers": getattr(
+                    tls_policy, "disabled_tls_ciphers", None
+                ),
+                "enabled_tls_ciphers": getattr(tls_policy, "enabled_tls_ciphers", None),
+                "min_tls_version": getattr(tls_policy, "min_tls_version", None),
+                "tls_enforced_for": getattr(tls_policy, "tls_enforced_for", None),
+                "trusted_client_certificate_authority": getattr(
+                    getattr(tls_policy, "trusted_client_certificate_authority", None),
+                    "name",
+                    None,
+                ),
+                "verify_client_certificate_trust": getattr(
+                    tls_policy, "verify_client_certificate_trust", None
+                ),
+            }
+        if policy.policy_type == "network-access":
+            rules = list(
+                array.get_policies_network_access_rules(policy_names=[p_name]).items
+            )
+            for rule in rules:
+                na_rules_dict = {
+                    "name": rule.name,
+                    "index": rule.index,
+                    "effect": rule.effect,
+                    "client": rule.client,
+                    "interfaces": rule.interfaces,
+                }
+                policy_info[p_name]["rules"].append(na_rules_dict)
     return policy_info
 
 

@@ -1,0 +1,13 @@
+minor_changes:
+  - purefa_info - QoS policies in the ``policies`` subset now report
+    ``max_total_bytes_per_sec``, ``max_total_ops_per_sec``, ``pod``, and
+    (REST 2.55+) ``realms``.
+  - purefa_info - TLS policies in the ``policies`` subset now report
+    ``appliance_certificate``, ``client_certificates_required``,
+    ``disabled_tls_ciphers``, ``enabled_tls_ciphers``, ``min_tls_version``,
+    ``tls_enforced_for``, ``trusted_client_certificate_authority``, and
+    ``verify_client_certificate_trust``.
+  - purefa_info - Network-access policies in the ``policies`` subset now
+    report their real rules. The ``rules`` field was previously hardcoded
+    to an empty list for every policy of this type, even when the policy
+    had real rules configured.
