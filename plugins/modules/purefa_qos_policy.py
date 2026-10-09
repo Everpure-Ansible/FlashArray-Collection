@@ -41,6 +41,8 @@ options:
   state:
     description:
     - Define whether the QoS policy should exist or not.
+    - C(absent) fails if the policy is still attached to any managed
+      directory. Detach it first (see I(directories)).
     default: present
     type: str
     choices: [ absent, present ]
@@ -53,6 +55,9 @@ options:
     description:
     - Value to rename the specified QoS policy to.
     - The destination name must not already be in use.
+    - Renaming is a standalone operation. Other field changes given in the
+      same task are not applied. Run the module again under the new name to
+      apply them.
     type: str
   max_total_bytes_per_sec:
     description:
