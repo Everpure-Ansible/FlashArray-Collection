@@ -125,9 +125,6 @@ CONTEXT_API_VERSION = "2.38"
 QUOTA_API_VERSION = "2.42"
 TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
-NETWORK_ACCESS_POLICY_API_VERSION = "2.52"
-QOS_POLICY_API_VERSION = "2.54"
-TLS_POLICY_API_VERSION = "2.54"
 # QoS realms arrived one version after the QoS policy endpoint itself
 POLICY_REALMS_API_VERSION = "2.55"
 # The support and software read endpoints each arrived separately
@@ -858,9 +855,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 "min_characters_per_group": pwd_policy.min_characters_per_group,
                 "min_password_length": pwd_policy.min_password_length,
             }
-        if policy.policy_type == "qos" and LooseVersion(
-            QOS_POLICY_API_VERSION
-        ) <= LooseVersion(array.get_rest_version()):
+        if policy.policy_type == "qos":
             qos_policy = list(array.get_policies_qos(names=[p_name]).items)[0]
             policy_info[p_name] |= {
                 "max_total_bytes_per_sec": getattr(
@@ -878,9 +873,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                     getattr(realm, "name", None)
                     for realm in getattr(qos_policy, "realms", None) or []
                 ]
-        if policy.policy_type == "tls" and LooseVersion(
-            TLS_POLICY_API_VERSION
-        ) <= LooseVersion(array.get_rest_version()):
+        if policy.policy_type == "tls":
             tls_policy = list(array.get_policies_tls(names=[p_name]).items)[0]
             policy_info[p_name] |= {
                 "appliance_certificate": getattr(
@@ -904,9 +897,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                     tls_policy, "verify_client_certificate_trust", None
                 ),
             }
-        if policy.policy_type == "network-access" and LooseVersion(
-            NETWORK_ACCESS_POLICY_API_VERSION
-        ) <= LooseVersion(array.get_rest_version()):
+        if policy.policy_type == "network-access":
             rules = list(
                 array.get_policies_network_access_rules(policy_names=[p_name]).items
             )

@@ -2210,24 +2210,6 @@ class TestGeneratePoliciesDict:
 
         assert result["qos-gold"]["realms"] == ["realm1"]
 
-    def test_generate_policies_dict_qos_below_floor_skips_branch(self):
-        """A qos policy below REST 2.54 is not read for its qos-specific fields"""
-        mock_policy = Mock()
-        mock_policy.name = "qos-gold"
-        mock_policy.policy_type = "qos"
-        mock_policy.enabled = True
-        mock_array = self._base_array(mock_policy, rest_version="2.53")
-
-        result = generate_policies_dict(
-            mock_array,
-            quota_available=False,
-            autodir_available=False,
-            nfs_user_mapping=False,
-        )
-
-        assert "max_total_bytes_per_sec" not in result["qos-gold"]
-        mock_array.get_policies_qos.assert_not_called()
-
     def test_generate_policies_dict_tls(self):
         """A tls policy reports its certificate, cipher, and enforcement fields"""
         mock_policy = Mock()
@@ -2267,24 +2249,6 @@ class TestGeneratePoliciesDict:
             == "nfs_client_ca"
         )
         assert result["tls-policy1"]["verify_client_certificate_trust"] is True
-
-    def test_generate_policies_dict_tls_below_floor_skips_branch(self):
-        """A tls policy below REST 2.54 is not read for its tls-specific fields"""
-        mock_policy = Mock()
-        mock_policy.name = "tls-policy1"
-        mock_policy.policy_type = "tls"
-        mock_policy.enabled = True
-        mock_array = self._base_array(mock_policy, rest_version="2.53")
-
-        result = generate_policies_dict(
-            mock_array,
-            quota_available=False,
-            autodir_available=False,
-            nfs_user_mapping=False,
-        )
-
-        assert "min_tls_version" not in result["tls-policy1"]
-        mock_array.get_policies_tls.assert_not_called()
 
     def test_generate_policies_dict_network_access_rules(self):
         """A network-access policy reports its real rules, not an empty list
@@ -2341,24 +2305,6 @@ class TestGeneratePoliciesDict:
         )
 
         assert result["allow-all"]["rules"] == []
-
-    def test_generate_policies_dict_network_access_below_floor_skips_branch(self):
-        """A network-access policy below REST 2.52 is not read for its rules"""
-        mock_policy = Mock()
-        mock_policy.name = "restricted"
-        mock_policy.policy_type = "network-access"
-        mock_policy.enabled = True
-        mock_array = self._base_array(mock_policy, rest_version="2.51")
-
-        result = generate_policies_dict(
-            mock_array,
-            quota_available=False,
-            autodir_available=False,
-            nfs_user_mapping=False,
-        )
-
-        assert result["restricted"]["rules"] == []
-        mock_array.get_policies_network_access_rules.assert_not_called()
 
 
 class TestGenerateClientsDict:
