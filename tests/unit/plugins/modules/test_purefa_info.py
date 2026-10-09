@@ -2129,6 +2129,183 @@ class TestGeneratePoliciesDict:
         assert result["snap-policy1"]["type"] == "snapshot"
         assert result["snap-policy1"]["enabled"] is True
 
+    @staticmethod
+    def _base_array(mock_policy, rest_version="2.56"):
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = rest_version
+        mock_array.get_policies.return_value = Mock(items=[mock_policy])
+        mock_array.get_directories_policies.return_value = Mock(items=[])
+        return mock_array
+
+    def test_generate_policies_dict_qos(self):
+        """A qos policy reports its aggregate bandwidth and ops limits, and pod"""
+        mock_policy = Mock()
+        mock_policy.name = "qos-gold"
+        mock_policy.policy_type = "qos"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy)
+        mock_qos_policy = Mock()
+        mock_qos_policy.max_total_bytes_per_sec = 107374182400
+        mock_qos_policy.max_total_ops_per_sec = 10000
+        mock_qos_policy.pod = Mock()
+        mock_qos_policy.pod.name = "pod1"
+        mock_qos_policy.realms = []
+        mock_array.get_policies_qos.return_value = Mock(items=[mock_qos_policy])
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert result["qos-gold"]["max_total_bytes_per_sec"] == 107374182400
+        assert result["qos-gold"]["max_total_ops_per_sec"] == 10000
+        assert result["qos-gold"]["pod"] == "pod1"
+        assert result["qos-gold"]["rules"] == []
+
+    def test_generate_policies_dict_qos_realms_gated_below_2_55(self):
+        """realms is omitted below REST 2.55, where the field does not exist"""
+        mock_policy = Mock()
+        mock_policy.name = "qos-gold"
+        mock_policy.policy_type = "qos"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy, rest_version="2.54")
+        mock_qos_policy = Mock(
+            spec=["max_total_bytes_per_sec", "max_total_ops_per_sec", "pod"]
+        )
+        mock_qos_policy.max_total_bytes_per_sec = None
+        mock_qos_policy.max_total_ops_per_sec = None
+        mock_qos_policy.pod = None
+        mock_array.get_policies_qos.return_value = Mock(items=[mock_qos_policy])
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert "realms" not in result["qos-gold"]
+
+    def test_generate_policies_dict_qos_realms_present_at_2_55(self):
+        """realms is reported, as realm names, from REST 2.55 onward"""
+        mock_realm = Mock()
+        mock_realm.name = "realm1"
+        mock_policy = Mock()
+        mock_policy.name = "qos-gold"
+        mock_policy.policy_type = "qos"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy, rest_version="2.55")
+        mock_qos_policy = Mock()
+        mock_qos_policy.realms = [mock_realm]
+        mock_array.get_policies_qos.return_value = Mock(items=[mock_qos_policy])
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert result["qos-gold"]["realms"] == ["realm1"]
+
+    def test_generate_policies_dict_tls(self):
+        """A tls policy reports its certificate, cipher, and enforcement fields"""
+        mock_policy = Mock()
+        mock_policy.name = "tls-policy1"
+        mock_policy.policy_type = "tls"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy)
+        mock_tls_policy = Mock()
+        mock_tls_policy.appliance_certificate = Mock()
+        mock_tls_policy.appliance_certificate.name = "nfs_server_cert"
+        mock_tls_policy.client_certificates_required = True
+        mock_tls_policy.disabled_tls_ciphers = None
+        mock_tls_policy.enabled_tls_ciphers = ["TLS_AES_128_GCM_SHA256"]
+        mock_tls_policy.min_tls_version = "1.3"
+        mock_tls_policy.tls_enforced_for = ["nfs"]
+        mock_tls_policy.trusted_client_certificate_authority = Mock()
+        mock_tls_policy.trusted_client_certificate_authority.name = "nfs_client_ca"
+        mock_tls_policy.verify_client_certificate_trust = True
+        mock_array.get_policies_tls.return_value = Mock(items=[mock_tls_policy])
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert result["tls-policy1"]["appliance_certificate"] == "nfs_server_cert"
+        assert result["tls-policy1"]["client_certificates_required"] is True
+        assert result["tls-policy1"]["enabled_tls_ciphers"] == [
+            "TLS_AES_128_GCM_SHA256"
+        ]
+        assert result["tls-policy1"]["min_tls_version"] == "1.3"
+        assert result["tls-policy1"]["tls_enforced_for"] == ["nfs"]
+        assert (
+            result["tls-policy1"]["trusted_client_certificate_authority"]
+            == "nfs_client_ca"
+        )
+        assert result["tls-policy1"]["verify_client_certificate_trust"] is True
+
+    def test_generate_policies_dict_network_access_rules(self):
+        """A network-access policy reports its real rules, not an empty list
+
+        Regression guard: this field was previously hardcoded to [] for every
+        policy of this type, even when the policy had real rules configured.
+        """
+        mock_policy = Mock()
+        mock_policy.name = "restricted"
+        mock_policy.policy_type = "network-access"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy)
+        mock_rule = Mock()
+        mock_rule.name = "rule1"
+        mock_rule.index = 1
+        mock_rule.effect = "deny"
+        mock_rule.client = "10.20.30.0/24"
+        mock_rule.interfaces = ["management-ssh"]
+        mock_array.get_policies_network_access_rules.return_value = Mock(
+            items=[mock_rule]
+        )
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert result["restricted"]["rules"] == [
+            {
+                "name": "rule1",
+                "index": 1,
+                "effect": "deny",
+                "client": "10.20.30.0/24",
+                "interfaces": ["management-ssh"],
+            }
+        ]
+
+    def test_generate_policies_dict_network_access_no_rules(self):
+        """A network-access policy with no rules reports an empty list, not an error"""
+        mock_policy = Mock()
+        mock_policy.name = "allow-all"
+        mock_policy.policy_type = "network-access"
+        mock_policy.enabled = True
+        mock_array = self._base_array(mock_policy)
+        mock_array.get_policies_network_access_rules.return_value = Mock(items=[])
+
+        result = generate_policies_dict(
+            mock_array,
+            quota_available=False,
+            autodir_available=False,
+            nfs_user_mapping=False,
+        )
+
+        assert result["allow-all"]["rules"] == []
+
 
 class TestGenerateClientsDict:
     """Test cases for generate_clients_dict function"""
