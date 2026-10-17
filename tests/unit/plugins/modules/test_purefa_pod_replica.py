@@ -9,6 +9,7 @@ __metaclass__ = type
 
 import sys
 from unittest.mock import Mock, patch, MagicMock
+from packaging.version import Version
 
 # Mock external dependencies before importing module
 sys.modules["grp"] = MagicMock()
@@ -48,7 +49,60 @@ from plugins.modules.purefa_pod_replica import (
     delete_rl,
     update_rl,
     create_rl,
+    check_stretched_source,
 )
+
+
+class TestCheckStretchedSource:
+    """Test cases for check_stretched_source function"""
+
+    @staticmethod
+    def _array(purity_version):
+        mock_array = Mock()
+        mock_array.get_arrays.return_value = Mock(
+            status_code=200, items=[Mock(version=purity_version)]
+        )
+        return mock_array
+
+    def test_unstretched_pod_skips_version_check(self):
+        """A pod on one array never needs the Purity version"""
+        mock_module = Mock()
+        mock_module.params = {"name": "test-pod", "context": ""}
+        mock_array = self._array("6.4.10")
+
+        check_stretched_source(mock_module, mock_array, Mock(array_count=1))
+
+        mock_array.get_arrays.assert_not_called()
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_pod_replica.LooseVersion", Version)
+    def test_stretched_pod_old_purity_fails(self):
+        """Before Purity 6.10.5 a stretched pod cannot be a replica source"""
+        mock_module = Mock()
+        mock_module.params = {"name": "test-pod", "context": ""}
+        mock_module.fail_json.side_effect = SystemExit
+        mock_array = self._array("6.10.4")
+
+        try:
+            check_stretched_source(mock_module, mock_array, Mock(array_count=2))
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        msg = mock_module.fail_json.call_args[1]["msg"]
+        assert "6.10.5" in msg
+        assert "6.10.4" in msg
+
+    @patch("plugins.modules.purefa_pod_replica.LooseVersion", Version)
+    def test_stretched_pod_multisite_purity_allowed(self):
+        """From Purity 6.10.5 a stretched pod may be a replica source"""
+        mock_module = Mock()
+        mock_module.params = {"name": "test-pod", "context": ""}
+        mock_array = self._array("6.10.6")
+
+        check_stretched_source(mock_module, mock_array, Mock(array_count=2))
+
+        mock_module.fail_json.assert_not_called()
 
 
 class TestGetLocalPod:

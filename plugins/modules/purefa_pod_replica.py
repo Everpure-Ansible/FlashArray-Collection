@@ -23,6 +23,10 @@ short_description:  Manage ActiveDR pod replica links between Everpure FlashArra
 version_added: '1.0.0'
 description:
     - This module manages ActiveDR pod replica links between Everpure FlashArrays.
+    - From Purity//FA 6.10.5 an ActiveCluster stretched pod can be the source of a
+      replica link (multi-site continuous replication). Earlier Purity versions
+      reject a stretched pod as the source and the module fails with a clear message.
+    - A stretched pod cannot be the target of a replica link.
 author: Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
   name:
@@ -75,6 +79,15 @@ EXAMPLES = """
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
 
+- name: Create a replica link from stretched pod foo to arrayC (Purity//FA 6.10.5+)
+  everpure.flasharray.purefa_pod_replica:
+    name: foo
+    target_array: arrayC
+    target_pod: foo-dr
+    state: present
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
 - name: Pause an pod replica link
   everpure.flasharray.purefa_pod_replica:
     name: foo
@@ -111,8 +124,14 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
     delete_with_context,
     check_response,
 )
+from ansible_collections.everpure.flasharray.plugins.module_utils.version import (
+    LooseVersion,
+)
 
 CONTEXT_VERSION = "2.38"
+# Purity//FA release that allows an ActiveCluster stretched pod to be the
+# source of an ActiveDR replica link (multi-site continuous replication).
+MULTISITE_PURITY_VERSION = "6.10.5"
 
 
 def get_local_pod(module, array):
@@ -179,6 +198,28 @@ def update_rl(module, array, local_rl):
                     f"Failed to resume replica link {module.params['name']}",
                 )
     module.exit_json(changed=changed)
+
+
+def check_stretched_source(module, array, local_pod):
+    """Fail unless a stretched pod may be the source of a new replica link.
+
+    Purity//FA 6.10.5 added multi-site continuous replication, where an
+    ActiveCluster stretched pod is the ActiveDR source. Older Purity rejects
+    the request, so fail early there with a message that says why.
+    """
+    if local_pod.array_count <= 1:
+        return
+    res = array.get_arrays()
+    check_response(res, module, "Failed to read the Purity version")
+    purity_version = list(res.items)[0].version
+    if LooseVersion(purity_version) < LooseVersion(MULTISITE_PURITY_VERSION):
+        module.fail_json(
+            msg=(
+                "Local pod {0} is stretched to a remote array. A stretched pod "
+                "can only be the source of a replica link from Purity//FA {1} "
+                "(this array runs {2})."
+            ).format(module.params["name"], MULTISITE_PURITY_VERSION, purity_version)
+        )
 
 
 def create_rl(module, array):
@@ -278,18 +319,12 @@ def main():
             msg="Selected local pod {0} does not exist.".format(module.params["name"])
         )
 
-    if local_pod.array_count > 1:
-        module.fail_json(
-            msg="Local Pod {0} is already stretched to a remote array.".format(
-                module.params["name"]
-            )
-        )
-
     local_replica_link = get_local_rl(module, array)
     if local_replica_link:
         if local_replica_link.status == "unhealthy":
-            module.fail_json(msg="Replca Link unhealthy - please check remote array")
+            module.fail_json(msg="Replica Link unhealthy - please check remote array")
     if state == "present" and not local_replica_link:
+        check_stretched_source(module, array, local_pod)
         create_rl(module, array)
     elif state == "present" and local_replica_link:
         update_rl(module, array, local_replica_link)

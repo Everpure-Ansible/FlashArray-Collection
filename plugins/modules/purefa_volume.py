@@ -33,11 +33,15 @@ options:
       B(***NOTE***) Manual deletion or eradication of individual volumes created
       using multi-volume will cause idempotency to fail
     - Multi-volume support only exists for volume creation
+    - When copying with I(target), the name may also be a volume snapshot,
+      including a protection group snapshot inside a pod, for example
+      C(pod::pgroup.suffix.volume). The snapshot is copied to I(target).
     type: str
     required: true
   target:
     description:
     - The name of the target volume, if copying.
+    - The copy source I(name) may be a volume or a volume snapshot.
     type: str
   state:
     description:
@@ -239,6 +243,15 @@ EXAMPLES = r"""
   everpure.flasharray.purefa_volume:
     name: foo
     target: bar
+    overwrite: true
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+    state: present
+
+- name: Restore volume vol1 in pod ac-test from a protection group snapshot
+  everpure.flasharray.purefa_volume:
+    name: ac-test::hourly.drill1.vol1
+    target: ac-test::vol1
     overwrite: true
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
@@ -535,6 +548,24 @@ def get_target(module, array):
         CONTEXT_API_VERSION,
         module,
         names=[module.params["target"]],
+    )
+    if res.status_code == 200:
+        return list(res.items)[0]
+    return None
+
+
+def get_source_snapshot(module, array):
+    """Return the volume snapshot named by I(name), or None.
+
+    A copy source may be a volume snapshot as well as a volume, including a
+    protection group snapshot inside a pod (``pod::pgroup.suffix.volume``).
+    """
+    res = get_with_context(
+        array,
+        "get_volume_snapshots",
+        CONTEXT_API_VERSION,
+        module,
+        names=[module.params["name"]],
     )
     if res.status_code == 200:
         return list(res.items)[0]
@@ -1744,6 +1775,11 @@ def main():
     if not volume:
         destroyed = get_destroyed_volume(module, array)
     target = get_target(module, array)
+    snapshot = None
+    if module.params["target"] and not volume and not destroyed:
+        # The copy source is not a volume, so it may be a volume snapshot
+        # (including a protection group snapshot inside a pod).
+        snapshot = get_source_snapshot(module, array)
     if module.params["count"]:
         if module.params["digits"] and module.params["digits"] not in range(1, 10):
             module.fail_json(msg="'digits' must be in the range of 1 to 10")
@@ -1800,6 +1836,8 @@ def main():
                     module.params["name"]
                 )
             )
+        elif state == "present" and snapshot and module.params["target"]:
+            copy_from_volume(module, array)
         elif state == "present" and volume and target:
             copy_from_volume(module, array)
         elif state == "present" and volume and not target:

@@ -72,6 +72,7 @@ from plugins.modules.purefa_volume import (
     get_volume,
     get_destroyed_volume,
     get_target,
+    get_source_snapshot,
     create_volume,
     create_multi_volume,
     update_volume,
@@ -206,6 +207,45 @@ class TestGetTarget:
         result = get_target(mock_module, mock_array)
 
         assert result == mock_volume
+
+
+class TestGetSourceSnapshot:
+    """Test cases for get_source_snapshot function"""
+
+    def test_get_source_snapshot_exists(self):
+        """Test a protection group snapshot in a pod is found as copy source"""
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "ac-test::hourly.drill1.vol1",
+            "target": "ac-test::vol1",
+            "context": "",
+        }
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_snapshot = Mock()
+        mock_snapshot.name = "ac-test::hourly.drill1.vol1"
+        mock_array.get_volume_snapshots.return_value = Mock(
+            status_code=200, items=[mock_snapshot]
+        )
+
+        result = get_source_snapshot(mock_module, mock_array)
+
+        assert result == mock_snapshot
+        mock_array.get_volume_snapshots.assert_called_once_with(
+            names=["ac-test::hourly.drill1.vol1"]
+        )
+
+    def test_get_source_snapshot_not_exists(self):
+        """Test get_source_snapshot returns None for an unknown name"""
+        mock_module = Mock()
+        mock_module.params = {"name": "new_volume", "target": "copy", "context": ""}
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_volume_snapshots.return_value = Mock(status_code=400, items=[])
+
+        result = get_source_snapshot(mock_module, mock_array)
+
+        assert result is None
 
 
 class TestCreateVolume:
@@ -870,6 +910,127 @@ class TestRenameVolume:
 
 class TestMain:
     """Test cases for main function"""
+
+    @staticmethod
+    def _copy_params(name, target):
+        return {
+            "name": name,
+            "state": "present",
+            "size": None,
+            "target": target,
+            "overwrite": True,
+            "move": None,
+            "rename": None,
+            "eradicate": False,
+            "bw_qos": None,
+            "iops_qos": None,
+            "pgroup": None,
+            "count": None,
+            "promotion_state": None,
+            "add_to_pgs": None,
+            "context": "",
+        }
+
+    @patch("plugins.modules.purefa_volume.copy_from_volume")
+    @patch("plugins.modules.purefa_volume.get_source_snapshot")
+    @patch("plugins.modules.purefa_volume.get_target")
+    @patch("plugins.modules.purefa_volume.get_destroyed_volume")
+    @patch("plugins.modules.purefa_volume.get_endpoint")
+    @patch("plugins.modules.purefa_volume.get_volume")
+    @patch("plugins.modules.purefa_volume.LooseVersion")
+    @patch("plugins.modules.purefa_volume.get_array")
+    @patch("plugins.modules.purefa_volume.AnsibleModule")
+    @patch("plugins.modules.purefa_volume.HAS_PURESTORAGE", True)
+    def test_main_copy_from_pgroup_snapshot_in_pod(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_loose_version,
+        mock_get_volume,
+        mock_get_endpoint,
+        mock_get_destroyed,
+        mock_get_target,
+        mock_get_snapshot,
+        mock_copy,
+    ):
+        """A protection group snapshot in a pod is a valid copy source"""
+        mock_loose_version.side_effect = float
+        mock_module = Mock()
+        mock_module.params = self._copy_params(
+            "ac-test::hourly.drill1.vol1", "ac-test::vol1"
+        )
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        mock_ansible_module.return_value = mock_module
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_fleets.return_value = Mock(status_code=400, items=[])
+        mock_get_array.return_value = mock_array
+
+        mock_get_volume.return_value = None
+        mock_get_endpoint.return_value = None
+        mock_get_destroyed.return_value = None
+        mock_get_target.return_value = Mock()
+        mock_get_snapshot.return_value = Mock()
+        mock_copy.side_effect = SystemExit("exit_json called")
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_get_snapshot.assert_called_once()
+        mock_copy.assert_called_once_with(mock_module, mock_array)
+        mock_module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_volume.copy_from_volume")
+    @patch("plugins.modules.purefa_volume.get_source_snapshot")
+    @patch("plugins.modules.purefa_volume.get_target")
+    @patch("plugins.modules.purefa_volume.get_destroyed_volume")
+    @patch("plugins.modules.purefa_volume.get_endpoint")
+    @patch("plugins.modules.purefa_volume.get_volume")
+    @patch("plugins.modules.purefa_volume.LooseVersion")
+    @patch("plugins.modules.purefa_volume.get_array")
+    @patch("plugins.modules.purefa_volume.AnsibleModule")
+    @patch("plugins.modules.purefa_volume.HAS_PURESTORAGE", True)
+    def test_main_copy_source_missing_still_needs_size(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        mock_loose_version,
+        mock_get_volume,
+        mock_get_endpoint,
+        mock_get_destroyed,
+        mock_get_target,
+        mock_get_snapshot,
+        mock_copy,
+    ):
+        """A source that is neither volume nor snapshot keeps the old error"""
+        mock_loose_version.side_effect = float
+        mock_module = Mock()
+        mock_module.params = self._copy_params("nosuchthing", "copy")
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        mock_ansible_module.return_value = mock_module
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_fleets.return_value = Mock(status_code=400, items=[])
+        mock_get_array.return_value = mock_array
+
+        mock_get_volume.return_value = None
+        mock_get_endpoint.return_value = None
+        mock_get_destroyed.return_value = None
+        mock_get_target.return_value = None
+        mock_get_snapshot.return_value = None
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_copy.assert_not_called()
+        mock_module.fail_json.assert_called_once()
+        assert "Size must be specified" in mock_module.fail_json.call_args[1]["msg"]
 
     @patch("plugins.modules.purefa_volume.get_array")
     @patch("plugins.modules.purefa_volume.AnsibleModule")

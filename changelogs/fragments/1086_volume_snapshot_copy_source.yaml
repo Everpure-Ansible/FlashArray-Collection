@@ -1,0 +1,5 @@
+bugfixes:
+  - purefa_volume - accept a volume snapshot as the copy source when ``target``
+    is set, including a protection group snapshot inside a pod such as
+    ``pod::pgroup.suffix.volume``. The module previously treated the snapshot
+    name as a new volume and failed with ``Size must be specified``.
