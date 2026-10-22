@@ -226,6 +226,9 @@ class TestCreateLocalUserSuccess:
         mock_array = Mock()
         mock_user = Mock()
         mock_user.role = None
+        # The mocked exit_json returns, so the code after it runs too: give the
+        # role-less user its (empty) policy list, as the array would.
+        mock_user.management_access_policies = []
 
         create_local_user(mock_module, mock_array, user=mock_user)
 
@@ -978,3 +981,321 @@ class TestPublicKeyComparison:
 
         mock_array.patch_admins.assert_not_called()
         assert mock_module.exit_json.call_args[1]["changed"] is False
+
+
+def _policy(name):
+    policy = Mock()
+    policy.name = name
+    return policy
+
+
+class TestAccessPolicy:
+    """Local users whose permissions come from a custom management access
+    policy instead of a built-in role (for example realm-scoped users)"""
+
+    def _params(self, **overrides):
+        params = {
+            "name": "realm-user",
+            "role": None,
+            "access_policy": "realm-storage",
+            "password": None,
+            "old_password": None,
+            "api": False,
+            "timeout": "0",
+            "public_key": None,
+        }
+        params.update(overrides)
+        return params
+
+    @patch("plugins.modules.purefa_user.ReferenceWithType")
+    @patch("plugins.modules.purefa_user.AdminPost")
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_create_with_access_policy_has_no_role(
+        self, mock_check_response, mock_admin_post, mock_ref
+    ):
+        """A new user gets the policy and no built-in role"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(password="pass123")
+        mock_array = Mock()
+
+        create_local_user(mock_module, mock_array, user=None)
+
+        mock_ref.assert_called_once_with(name="realm-storage")
+        kwargs = mock_admin_post.call_args[1]
+        assert kwargs["management_access_policies"] == [mock_ref.return_value]
+        assert "role" not in kwargs
+        mock_array.post_admins.assert_called_once_with(
+            names=["realm-user"], admin=mock_admin_post.return_value
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_existing_member_is_unchanged(self, mock_check_response):
+        """Already a member of exactly that policy: nothing to do"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params()
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = None
+        mock_user.management_access_policies = [_policy("realm-storage")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefa_user.ReferenceWithType")
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_role_user_moves_to_access_policy(self, mock_check_response, mock_ref):
+        """A user with a built-in role (a member of that role's built-in
+        policy) joins the custom policy, then leaves the built-in one"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params()
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = "readonly"
+        mock_user.management_access_policies = [_policy("readonly")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_ref.assert_called_once_with(name="realm-user", resource_type="admins")
+        add = mock_array.post_policies_management_access_members
+        assert add.call_args[1]["policy_names"] == ["realm-storage"]
+        mock_array.delete_policies_management_access_members.assert_called_once_with(
+            policy_names=["readonly"],
+            member_names=["realm-user"],
+            member_types=["admins"],
+        )
+        mock_array.patch_admins.assert_not_called()
+        # Added first, removed second: the user never has no access at all
+        names = [c[0] for c in mock_array.method_calls]
+        assert names.index("post_policies_management_access_members") < names.index(
+            "delete_policies_management_access_members"
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_policy_user_moves_to_role_via_builtin_policy(self, mock_check_response):
+        """The array refuses a role change for a policy-only user ("User is
+        not a role user"), so it moves to the role's built-in policy"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(role="readonly", access_policy=None)
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = None
+        mock_user.management_access_policies = [_policy("realm-storage")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        add = mock_array.post_policies_management_access_members
+        assert add.call_args[1]["policy_names"] == ["readonly"]
+        mock_array.delete_policies_management_access_members.assert_called_once_with(
+            policy_names=["realm-storage"],
+            member_names=["realm-user"],
+            member_types=["admins"],
+        )
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_user.AdminRole")
+    @patch("plugins.modules.purefa_user.AdminPost")
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_new_user_without_role_or_policy_is_readonly(
+        self, mock_check_response, mock_admin_post, mock_admin_role
+    ):
+        """The documented default still applies when creating a user"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(access_policy=None, password="pass123")
+        mock_array = Mock()
+
+        create_local_user(mock_module, mock_array, user=None)
+
+        mock_admin_role.assert_called_once_with(name="readonly")
+        assert mock_admin_post.call_args[1]["role"] == mock_admin_role.return_value
+        mock_array.post_admins.assert_called_once()
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_policy_user_untouched_when_neither_option_given(self, mock_check_response):
+        """Regression (review of #1087): a task that names only the user
+        must not move a policy-scoped user onto readonly"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(access_policy=None)
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = None
+        mock_user.management_access_policies = [_policy("realm-storage")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        mock_array.post_policies_management_access_members.assert_not_called()
+        mock_array.delete_policies_management_access_members.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefa_user.check_response")
+    def test_role_user_untouched_when_neither_option_given(self, mock_check_response):
+        """Without role, an existing role user keeps its role (no implicit
+        readonly)"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(access_policy=None)
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = "array_admin"
+        mock_user.management_access_policies = [_policy("array_admin")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        mock_array.post_policies_management_access_members.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    def test_policy_change_check_mode(self):
+        """Check mode reports the change and makes none"""
+        mock_module = Mock()
+        mock_module.check_mode = True
+        mock_module.params = self._params()
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = None
+        mock_user.management_access_policies = [_policy("other-policy")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    def test_pureuser_policy_is_not_modified(self):
+        """pureuser keeps its access, as it keeps its role"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = self._params(name="pureuser")
+        mock_array = Mock()
+        mock_user = Mock()
+        mock_user.role = Mock()
+        mock_user.role.name = "array_admin"
+        mock_user.management_access_policies = [_policy("array_admin")]
+
+        create_local_user(mock_module, mock_array, mock_user)
+
+        mock_array.patch_admins.assert_not_called()
+        mock_module.warn.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+
+class TestAccessPolicyMain:
+    """Option handling in main()"""
+
+    def _module(self, **overrides):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.params = {
+            "name": "realm-user",
+            "ad_user": False,
+            "state": "present",
+            "role": None,
+            "access_policy": None,
+            "password": None,
+            "old_password": None,
+            "api": False,
+            "timeout": "0",
+            "public_key": None,
+        }
+        mock_module.params.update(overrides)
+        return mock_module
+
+    @patch("plugins.modules.purefa_user.create_local_user")
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_missing_role_is_not_turned_into_readonly(
+        self, mock_ansible_module, mock_get_array, mock_create
+    ):
+        """main() must not inject a role: "not given" and "readonly" have to
+        stay distinguishable for existing users"""
+        import pytest
+
+        mock_module = self._module()
+        mock_ansible_module.return_value = mock_module
+        mock_get_array.return_value = Mock()
+        mock_create.side_effect = SystemExit(0)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert mock_module.params["role"] is None
+        mock_create.assert_called_once()
+        assert mock_ansible_module.call_args[1]["mutually_exclusive"] == [
+            ["role", "access_policy"]
+        ]
+
+    @patch("plugins.modules.purefa_user.create_local_user")
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_access_policy_leaves_role_unset(
+        self, mock_ansible_module, mock_get_array, mock_create
+    ):
+        """With access_policy no readonly role is added"""
+        import pytest
+
+        mock_module = self._module(access_policy="realm-storage")
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.57"
+        mock_get_array.return_value = mock_array
+        mock_create.side_effect = SystemExit(0)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert mock_module.params["role"] is None
+        mock_module.fail_json.assert_not_called()
+        mock_create.assert_called_once()
+
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_access_policy_needs_rest_2_36(self, mock_ansible_module, mock_get_array):
+        """Older arrays are refused before anything is changed"""
+        import pytest
+
+        mock_module = self._module(access_policy="realm-storage")
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.35"
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert "2.36" in mock_module.fail_json.call_args[1]["msg"]
+        mock_array.post_admins.assert_not_called()
+        mock_array.patch_admins.assert_not_called()
+
+    @patch("plugins.modules.purefa_user.get_array")
+    @patch("plugins.modules.purefa_user.AnsibleModule")
+    def test_access_policy_rejected_for_ad_user(
+        self, mock_ansible_module, mock_get_array
+    ):
+        """AD users get their access from directory service roles"""
+        import pytest
+
+        mock_module = self._module(
+            name="first.last", ad_user=True, access_policy="realm-storage"
+        )
+        mock_ansible_module.return_value = mock_module
+
+        with pytest.raises(SystemExit):
+            main()
+
+        assert "local users only" in mock_module.fail_json.call_args[1]["msg"]

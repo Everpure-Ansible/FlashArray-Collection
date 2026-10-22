@@ -38,9 +38,29 @@ options:
   role:
     description:
     - Sets the local user's access level to the array
+    - Mutually exclusive with I(access_policy).
+    - A new user gets C(readonly) when neither I(role) nor I(access_policy) is
+      set. An existing user's role or policy is only changed when I(role) or
+      I(access_policy) is given.
     type: str
-    default: readonly
     choices: [ readonly, ops_admin, storage_admin, array_admin ]
+  access_policy:
+    description:
+    - Name of a custom management access policy that gives the local user
+      its permissions, instead of a built-in I(role).
+    - The user gets no built-in role, so its access is limited to what the
+      policy grants. For example, a policy granting C(storage) scoped to a
+      realm makes a realm-scoped user.
+    - The user becomes a member of this policy only, which replaces any
+      role or other policy it had. The new membership is added before the
+      old one is removed.
+    - Setting I(role) on a user that has an access policy moves it back to
+      that built-in role.
+    - Mutually exclusive with I(role).
+    - Local users only.
+    - Requires Purity//FA 6.6.9, or higher (REST 2.36).
+    type: str
+    version_added: '1.46.0'
   password:
     description:
     - Password for the local user.
@@ -96,6 +116,16 @@ EXAMPLES = r"""
 
   debug:
     msg: "API Token: {{ result['user_info']['user_api'] }}"
+
+- name: Create a realm-scoped user from a custom management access policy, with an API token
+  everpure.flasharray.purefa_user:
+    name: ocp-csi
+    password: apassword
+    access_policy: ocp-realm-storage
+    api: true
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+  register: result
 
 - name: Overwrite/add SSH public key for existing user (NOT IDEMPOTENT)
   everpure.flasharray.purefa_user:
@@ -158,7 +188,14 @@ RETURN = r"""
 
 HAS_PURESTORAGE = True
 try:
-    from pypureclient.flasharray import AdminPost, AdminPatch, AdminRole
+    from pypureclient.flasharray import (
+        AdminPost,
+        AdminPatch,
+        AdminRole,
+        PolicyMemberPost,
+        PolicymemberpostMembers,
+        ReferenceWithType,
+    )
 except ImportError:
     HAS_PURESTORAGE = False
 
@@ -174,6 +211,11 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.common import 
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
     check_response,
 )
+from ansible_collections.everpure.flasharray.plugins.module_utils.version import (
+    LooseVersion,
+)
+
+POLICY_API_VERSION = "2.36"
 
 LOCAL_NAME_PATTERN = re.compile("^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
 # Deny only illegal characters: the separators the array splits or routes on,
@@ -217,21 +259,64 @@ def get_user(module, array):
     return list(res.items)[0]
 
 
+def set_access_policy(module, array, user, policy):
+    """Make the user a member of exactly one management access policy.
+
+    The array changes policy membership only through the policy members
+    endpoints (PATCH admins refuses management_access_policies). The new
+    membership is added before the old ones are removed, so the user is
+    never left without access.
+    """
+    name = module.params["name"]
+    current = [
+        p.name for p in (getattr(user, "management_access_policies", None) or [])
+    ]
+    if policy not in current:
+        res = array.post_policies_management_access_members(
+            policy_names=[policy],
+            members=PolicyMemberPost(
+                members=[
+                    PolicymemberpostMembers(
+                        member=ReferenceWithType(name=name, resource_type="admins")
+                    )
+                ]
+            ),
+        )
+        check_response(res, module, f"Adding {name} to access policy {policy} failed")
+    for old in current:
+        if old != policy:
+            res = array.delete_policies_management_access_members(
+                policy_names=[old], member_names=[name], member_types=["admins"]
+            )
+            check_response(
+                res, module, f"Removing {name} from access policy {old} failed"
+            )
+
+
 def create_local_user(module, array, user):
     """Create or Update Local User Account"""
     changed = key_changed = api_changed = role_changed = passwd_changed = False
-    role = module.params["role"]
+    policy_changed = False
+    # readonly is the default for a NEW user only. module.params["role"]
+    # stays None when the task omits it, so the update path below can tell
+    # "not given" from "readonly" and leave a policy-scoped user alone.
+    role = module.params["role"] or "readonly"
+    access_policy = module.params.get("access_policy")
     api_token = "No API token created"
     if not user:
         changed = True
         if not module.check_mode:
-            res = array.post_admins(
-                names=[module.params["name"]],
-                admin=AdminPost(
+            if access_policy:
+                admin = AdminPost(
+                    management_access_policies=[ReferenceWithType(name=access_policy)],
+                    password=module.params["password"],
+                )
+            else:
+                admin = AdminPost(
                     role=AdminRole(name=role),
                     password=module.params["password"],
-                ),
-            )
+                )
+            res = array.post_admins(names=[module.params["name"]], admin=admin)
             check_response(
                 res, module, f"Failed to create user {module.params['name']}"
             )
@@ -293,17 +378,38 @@ def create_local_user(module, array, user):
             if module.params["name"] != "pureuser":
                 role_changed = True
                 if not module.check_mode:
-                    res = array.patch_admins(
-                        names=[module.params["name"]],
-                        admin=AdminPatch(role=AdminRole(name=module.params["role"])),
-                    )
-                    check_response(
-                        res,
-                        module,
-                        f"Local User {module.params['name']} role change failed",
-                    )
+                    if getattr(getattr(user, "role", None), "name", None) is None:
+                        # A user that gets its access from a custom policy
+                        # is not a role user: the array refuses a role
+                        # change for it. Each built-in role is a built-in
+                        # policy of the same name, so switch policies.
+                        set_access_policy(module, array, user, module.params["role"])
+                    else:
+                        res = array.patch_admins(
+                            names=[module.params["name"]],
+                            admin=AdminPatch(
+                                role=AdminRole(name=module.params["role"])
+                            ),
+                        )
+                        check_response(
+                            res,
+                            module,
+                            f"Local User {module.params['name']} role change failed",
+                        )
             else:
                 module.warn("Role for 'pureuser' cannot be modified.")
+        if access_policy:
+            current_policies = sorted(
+                policy.name
+                for policy in (getattr(user, "management_access_policies", None) or [])
+            )
+            if current_policies != [access_policy]:
+                if module.params["name"] != "pureuser":
+                    policy_changed = True
+                    if not module.check_mode:
+                        set_access_policy(module, array, user, access_policy)
+                else:
+                    module.warn("Access policy for 'pureuser' cannot be modified.")
         if _public_key_change(module, user):
             key_changed = True
             if not module.check_mode:
@@ -312,7 +418,13 @@ def create_local_user(module, array, user):
                     admin=AdminPatch(public_key=module.params["public_key"]),
                 )
                 check_response(res, module, "Failed to change SSH key")
-        changed = bool(passwd_changed or role_changed or api_changed or key_changed)
+        changed = bool(
+            passwd_changed
+            or role_changed
+            or policy_changed
+            or api_changed
+            or key_changed
+        )
     module.exit_json(changed=changed, user_info=api_token)
 
 
@@ -395,8 +507,8 @@ def main():
             role=dict(
                 type="str",
                 choices=["readonly", "ops_admin", "storage_admin", "array_admin"],
-                default="readonly",
             ),
+            access_policy=dict(type="str"),
             state=dict(type="str", default="present", choices=["absent", "present"]),
             password=dict(type="str", no_log=True),
             old_password=dict(type="str", no_log=True),
@@ -407,13 +519,26 @@ def main():
         )
     )
 
-    module = AnsibleModule(argument_spec, supports_check_mode=True)
+    module = AnsibleModule(
+        argument_spec,
+        mutually_exclusive=[["role", "access_policy"]],
+        supports_check_mode=True,
+    )
 
     if not HAS_PURESTORAGE:
         module.fail_json(msg="py-pure-client sdk is required for this module")
 
+    if module.params.get("access_policy") and module.params["ad_user"]:
+        module.fail_json(msg="access_policy applies to local users only")
+
     state = module.params["state"]
     array = get_array(module)
+    if module.params.get("access_policy") and LooseVersion(
+        array.get_rest_version()
+    ) < LooseVersion(POLICY_API_VERSION):
+        module.fail_json(
+            msg="access_policy requires Purity//FA 6.6.9, or higher (REST 2.36)"
+        )
     if module.params["ad_user"]:
         if not AD_NAME_PATTERN.match(module.params["name"]):
             module.fail_json(
