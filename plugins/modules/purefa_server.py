@@ -54,8 +54,10 @@ options:
   dns:
     description:
     - Name of the DNS configuration the file server uses.
-    - This is a DNS configuration with I(service=file), as created by
-      M(everpure.flasharray.purefa_dns).
+    - This is a DNS configuration created by M(everpure.flasharray.purefa_dns),
+      either the one with I(service=file) or one created without a service.
+      Each file server needs a configuration of its own, so only the first
+      can take the C(file) one; the others are created without a service.
     - A new file server is given the array's management DNS configuration by
       default, so this is for moving one onto a DNS configuration of its own.
     - Set to an empty string to detach the current DNS configuration.
