@@ -187,9 +187,7 @@ def add_syslog(module, array):
             names=[module.params["name"]],
             syslog_server=SyslogServer(name=module.params["name"], uri=full_address),
         )
-        check_response(
-            res, module, f"Adding syslog server {module.params['name']} failed"
-        )
+        check_response(res, module, f"Adding syslog server {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -222,7 +220,7 @@ def update_syslog(module, array):
                 syslog_server=SyslogServer(uri=full_address),
             )
             check_response(
-                res, module, f"Updating syslog server {module.params['name']} failed"
+                res, module, f"Updating syslog server {module.params['name']}"
             )
     module.exit_json(changed=changed)
 

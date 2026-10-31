@@ -110,7 +110,7 @@ def update_capacity(module, array):
             requested_capacity=module.params["capacity"]
         )
     )
-    check_response(expanded, module, "Expansion request failed")
+    check_response(expanded, module, "Expansion request")
 
 
 def main():

@@ -28,6 +28,7 @@ options:
     description:
     - The name of the volume.
     - Volume could be created in a POD with this syntax POD_NAME::VOLUME_NAME.
+    - If the pod is in a realm use the syntax REALM_NAME::POD_NAME::VOLUME_NAME.
     - Volume could be created in a volume group with this syntax VG_NAME/VOLUME_NAME.
     - Multi-volume support available from Purity//FA 6.0.0
       B(***NOTE***) Manual deletion or eradication of individual volumes created
@@ -638,9 +639,7 @@ def create_volume(module, array):
                         ),
                     ),
                 )
-                check_response(
-                    res, module, f"Volume {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Volume {module.params['name']} creation")
         elif module.params["iops_qos"] and not module.params["bw_qos"]:
             changed = True
             if not module.check_mode:
@@ -655,9 +654,7 @@ def create_volume(module, array):
                         qos=Qos(iops_limit=int(module.params["iops_qos"])),
                     ),
                 )
-                check_response(
-                    res, module, f"Volume {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Volume {module.params['name']} creation")
         else:
             changed = True
             if not module.check_mode:
@@ -677,9 +674,7 @@ def create_volume(module, array):
                         ),
                     ),
                 )
-                check_response(
-                    res, module, f"Volume {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Volume {module.params['name']} creation")
     else:
         changed = True
         if not module.check_mode:
@@ -693,9 +688,7 @@ def create_volume(module, array):
                     provisioned=int(human_to_bytes(module.params["size"]))
                 ),
             )
-            check_response(
-                res, module, f"Volume {module.params['name']} creation failed"
-            )
+            check_response(res, module, f"Volume {module.params['name']} creation")
     if module.params["promotion_state"]:
         volume = VolumePatch(requested_promotion_state=module.params["promotion_state"])
         changed = True
@@ -923,7 +916,7 @@ def create_multi_volume(module, array, single=False):
         check_response(
             res,
             module,
-            f"Multi-Volume {module.params['name']}#{module.params['suffix']} creation failed",
+            f"Multi-Volume {module.params['name']}#{module.params['suffix']} creation",
         )
         if module.params["promotion_state"]:
             volume = VolumePatch(
@@ -1068,7 +1061,7 @@ def copy_from_volume(module, array):
                 check_response(
                     res,
                     module,
-                    f"Copy volume {module.params['name']} to volume {module.params['target']} failed",
+                    f"Copy volume {module.params['name']} to volume {module.params['target']}",
                 )
     elif tgt is not None and module.params["overwrite"]:
         changed = True
@@ -1085,7 +1078,7 @@ def copy_from_volume(module, array):
             check_response(
                 res,
                 module,
-                f"Copy volume {module.params['name']} to volume {module.params['target']} failed",
+                f"Copy volume {module.params['name']} to volume {module.params['target']}",
             )
     module.exit_json(
         changed=changed, volume=_volfact(module, array, module.params["target"])
@@ -1136,7 +1129,7 @@ def update_volume(module, array):
                         ),
                     )
                     check_response(
-                        res, module, f"Volume {module.params['name']} resize failed"
+                        res, module, f"Volume {module.params['name']} resize"
                     )
     if module.params["bw_qos"]:
         # "0" (or an empty string) means "no limit", which the array
@@ -1156,9 +1149,9 @@ def update_volume(module, array):
                     volume=VolumePatch(qos=Qos(bandwidth_limit=new_bw_limit)),
                 )
                 if new_bw_limit == 549755813888:
-                    msg = f"Volume {module.params['name']} Bandwidth QoS removal failed"
+                    msg = f"Volume {module.params['name']} Bandwidth QoS removal"
                 else:
-                    msg = f"Volume {module.params['name']} Bandwidth QoS change failed"
+                    msg = f"Volume {module.params['name']} Bandwidth QoS change"
                 check_response(res, module, msg)
     if module.params["iops_qos"]:
         # "0" (or an empty string) means "no limit", which the array
@@ -1178,9 +1171,9 @@ def update_volume(module, array):
                     volume=VolumePatch(qos=Qos(iops_limit=new_iops_limit)),
                 )
                 if new_iops_limit == 100000000:
-                    msg = f"Volume {module.params['name']} IOPs QoS removal failed"
+                    msg = f"Volume {module.params['name']} IOPs QoS removal"
                 else:
-                    msg = f"Volume {module.params['name']} IOPs QoS change failed"
+                    msg = f"Volume {module.params['name']} IOPs QoS change"
                 check_response(res, module, msg)
     if module.params["promotion_state"]:
         if module.params["promotion_state"] != vol.promotion_status:
@@ -1332,7 +1325,7 @@ def rename_volume(module, array, source_exists=True):
             check_response(
                 res,
                 module,
-                f"Rename volume {module.params['name']} to {module.params['rename']} failed",
+                f"Rename volume {module.params['name']} to {module.params['rename']}",
             )
 
     module.exit_json(changed=changed, volume=_volfact(module, array, target_name))
@@ -1503,7 +1496,7 @@ def move_volume(module, array):
         check_response(
             res,
             module,
-            f"Move of volume {module.params['name']} to {module.params['move']} failed",
+            f"Move of volume {module.params['name']} to {module.params['move']}",
         )
         if res.status_code == 200:
             volume_name = list(res.items)[0].name
@@ -1565,16 +1558,12 @@ def delete_volume(module, array):
                     module,
                     names=[module.params["name"]],
                 )
-                check_response(
-                    res, module, f"Eradicate volume {module.params['name']} failed"
-                )
+                check_response(res, module, f"Eradicate volume {module.params['name']}")
                 module.exit_json(
                     changed=changed,
                 )
             elif res.status_code != 200:
-                check_response(
-                    res, module, f"Delete volume {module.params['name']} failed"
-                )
+                check_response(res, module, f"Delete volume {module.params['name']}")
     module.exit_json(
         changed=changed, volume=_volfact(module, array, module.params["name"])
     )
@@ -1597,7 +1586,7 @@ def eradicate_volume(module, array):
                 names=[module.params["name"]],
             )
             check_response(
-                res, module, f"Eradication of volume {module.params['name']} failed"
+                res, module, f"Eradication of volume {module.params['name']}"
             )
     module.exit_json(changed=changed, volume=volfact)
 
@@ -1615,9 +1604,7 @@ def recover_volume(module, array):
             names=[module.params["name"]],
             volume=VolumePatch(destroyed=False),
         )
-        check_response(
-            res, module, f"Recovery of volume {module.params['name']} failed"
-        )
+        check_response(res, module, f"Recovery of volume {module.params['name']}")
     module.exit_json(
         changed=changed, volume=_volfact(module, array, module.params["name"])
     )

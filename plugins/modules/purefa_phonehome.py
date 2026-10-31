@@ -104,7 +104,7 @@ def main():
         changed = True
         if not module.check_mode:
             res = array.patch_support(support=SupportPatch(phonehome_enabled=True))
-            check_response(res, module, "Enabling Phonehome failed")
+            check_response(res, module, "Enabling Phonehome")
             if (
                 LooseVersion(EXCLUDES_API_VERSION) <= LooseVersion(api_version)
                 and module.params["excludes"]
@@ -112,7 +112,7 @@ def main():
                 res = array.patch_support(
                     support=SupportPatch(phonehome_excludes=module.params["excludes"])
                 )
-                check_response(res, module, "Updating Phonehome failed")
+                check_response(res, module, "Updating Phonehome")
     elif module.params["state"] == "present" and phonehome:
         if LooseVersion(EXCLUDES_API_VERSION) <= LooseVersion(api_version):
             # Only compare when excludes was supplied; an omitted parameter
@@ -127,12 +127,12 @@ def main():
                             phonehome_excludes=module.params["excludes"]
                         )
                     )
-                    check_response(res, module, "Updating Phonehome failed")
+                    check_response(res, module, "Updating Phonehome")
     elif module.params["state"] == "absent" and phonehome:
         changed = True
         if not module.check_mode:
             res = array.patch_support(support=SupportPatch(phonehome_enabled=False))
-            check_response(res, module, "Disabling Phonehome failed")
+            check_response(res, module, "Disabling Phonehome")
     module.exit_json(changed=changed)
 
 

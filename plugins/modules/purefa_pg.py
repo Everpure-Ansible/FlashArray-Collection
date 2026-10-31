@@ -438,7 +438,7 @@ def make_pgroup(module, array):
                     snapshot_schedule=SnapshotSchedule(enabled=enabled)
                 ),
             )
-        check_response(res, module, f"Enabling pgroup {module.params['name']} failed")
+        check_response(res, module, f"Enabling pgroup {module.params['name']}")
         if module.params["volume"]:
             res = post_with_context(
                 array,
@@ -449,7 +449,7 @@ def make_pgroup(module, array):
                 member_names=module.params["volume"],
             )
             check_response(
-                res, module, f"Adding volumes to pgroup {module.params['name']} failed"
+                res, module, f"Adding volumes to pgroup {module.params['name']}"
             )
         if module.params["host"]:
             res = post_with_context(
@@ -461,7 +461,7 @@ def make_pgroup(module, array):
                 member_names=module.params["host"],
             )
             check_response(
-                res, module, f"Adding hosts to pgroup {module.params['name']} failed"
+                res, module, f"Adding hosts to pgroup {module.params['name']}"
             )
         if module.params["hostgroup"]:
             res = post_with_context(
@@ -475,7 +475,7 @@ def make_pgroup(module, array):
             check_response(
                 res,
                 module,
-                f"Adding hostgroups to pgroup {module.params['name']} failed",
+                f"Adding hostgroups to pgroup {module.params['name']}",
             )
         if module.params["safe_mode"]:
             res = patch_with_context(
@@ -495,11 +495,13 @@ def make_pgroup(module, array):
 def rename_exists(module, array):
     """Determine if rename target already exists"""
     new_name = module.params["rename"]
-    if ":" in module.params["name"]:
+    if "::" in module.params["name"]:
+        # Containers nest (realm::pod), so keep everything but the leaf
+        container = "::".join(module.params["name"].split("::")[:-1])
+        new_name = container + "::" + module.params["rename"]
+    elif ":" in module.params["name"]:
         container = module.params["name"].split(":")[0]
         new_name = container + ":" + module.params["rename"]
-        if "::" in module.params["name"]:
-            new_name = container + "::" + module.params["rename"]
     res = get_with_context(
         array,
         "get_protection_groups",
@@ -562,7 +564,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Changing targets for pgroup {module.params['name']} failed",
+                            f"Changing targets for pgroup {module.params['name']}",
                         )
         else:
             # state == absent: detach the listed targets that are attached
@@ -582,7 +584,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Removing target {target} from pgroup {module.params['name']} failed",
+                            f"Removing target {target} from pgroup {module.params['name']}",
                         )
 
     if (
@@ -608,7 +610,7 @@ def update_pgroup(module, array):
             check_response(
                 res,
                 module,
-                f"Changing replication enabled state of pgroup {module.params['name']} failed",
+                f"Changing replication enabled state of pgroup {module.params['name']}",
             )
     elif (
         not module.params["target"]
@@ -631,7 +633,7 @@ def update_pgroup(module, array):
             check_response(
                 res,
                 module,
-                f"Changing snapshot enabled state of pgroup {module.params['name']} failed",
+                f"Changing snapshot enabled state of pgroup {module.params['name']}",
             )
     if (
         module.params["volume"]
@@ -654,7 +656,7 @@ def update_pgroup(module, array):
                     check_response(
                         res,
                         module,
-                        f"Adding volumes to pgroup {module.params['name']} failed",
+                        f"Adding volumes to pgroup {module.params['name']}",
                     )
         else:
             pgvols = []
@@ -685,7 +687,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Adding volumes in pgroup {module.params['name']} failed",
+                            f"Adding volumes in pgroup {module.params['name']}",
                         )
             else:
                 old_vols = [x for x in module.params["volume"] if x in pgvols]
@@ -703,7 +705,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Removing volumes from pgroup {module.params['name']} failed",
+                            f"Removing volumes from pgroup {module.params['name']}",
                         )
 
     if (
@@ -727,7 +729,7 @@ def update_pgroup(module, array):
                     check_response(
                         res,
                         module,
-                        f"Adding hosts to pgroup {module.params['name']} failed",
+                        f"Adding hosts to pgroup {module.params['name']}",
                     )
         else:
             pghosts = []
@@ -758,7 +760,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Adding hosts in pgroup {module.params['name']} failed",
+                            f"Adding hosts in pgroup {module.params['name']}",
                         )
             else:
                 old_hosts = [x for x in module.params["host"] if x in pghosts]
@@ -776,7 +778,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Removing hosts from pgroup {module.params['name']} failed",
+                            f"Removing hosts from pgroup {module.params['name']}",
                         )
 
     if (
@@ -800,7 +802,7 @@ def update_pgroup(module, array):
                     check_response(
                         res,
                         module,
-                        f"Adding hostgroups in pgroup {module.params['name']} failed",
+                        f"Adding hostgroups in pgroup {module.params['name']}",
                     )
         else:
             pghostgs = []
@@ -831,7 +833,7 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Adding hostgroups in pgroup {module.params['name']} failed",
+                            f"Adding hostgroups in pgroup {module.params['name']}",
                         )
             else:
                 old_hgs = [x for x in module.params["hostgroup"] if x in pghostgs]
@@ -849,16 +851,16 @@ def update_pgroup(module, array):
                         check_response(
                             res,
                             module,
-                            f"Removing hostgroups from pgroup {module.params['name']} failed",
+                            f"Removing hostgroups from pgroup {module.params['name']}",
                         )
     if module.params["rename"]:
         if not rename_exists(module, array):
-            if ":" in module.params["name"]:
+            if "::" in module.params["name"]:
+                container = "::".join(module.params["name"].split("::")[:-1])
+                rename = container + "::" + module.params["rename"]
+            elif ":" in module.params["name"]:
                 container = module.params["name"].split(":")[0]
-                if "::" in module.params["name"]:
-                    rename = container + "::" + module.params["rename"]
-                else:
-                    rename = container + ":" + module.params["rename"]
+                rename = container + ":" + module.params["rename"]
             else:
                 rename = module.params["rename"]
             renamed = True
@@ -872,7 +874,7 @@ def update_pgroup(module, array):
                     protection_group=ProtectionGroup(name=rename),
                 )
                 module.params["name"] = rename
-                check_response(res, module, f"Rename to {rename} failed")
+                check_response(res, module, f"Rename to {rename}")
         else:
             module.warn(
                 "Rename failed. Protection group {0} already exists in container. Continuing with other changes...".format(
@@ -926,9 +928,7 @@ def eradicate_pgroup(module, array):
             module,
             names=[module.params["name"]],
         )
-        check_response(
-            res, module, f"Eradicating pgroup {module.params['name']} failed"
-        )
+        check_response(res, module, f"Eradicating pgroup {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -944,7 +944,7 @@ def delete_pgroup(module, array):
             names=[module.params["name"]],
             protection_group=ProtectionGroup(destroyed=True),
         )
-        check_response(res, module, f"Deleting pgroup {module.params['name']} failed")
+        check_response(res, module, f"Deleting pgroup {module.params['name']}")
         if module.params["eradicate"]:
             eradicate_pgroup(module, array)
 
@@ -963,7 +963,7 @@ def recover_pgroup(module, array):
             names=[module.params["name"]],
             protection_group=ProtectionGroup(destroyed=False),
         )
-        check_response(res, module, f"Recover pgroup {module.params['name']} failed")
+        check_response(res, module, f"Recover pgroup {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -1046,6 +1046,9 @@ def main():
     xpgroup = get_pending_pgroup(module, array)
     if "::" in module.params["name"]:
         if not get_pod(module, array):
+            if state == "absent":
+                # No pod means no group to remove
+                module.exit_json(changed=False)
             module.fail_json(
                 msg="Pod {0} does not exist.".format(
                     "::".join(module.params["name"].split("::")[:-1])

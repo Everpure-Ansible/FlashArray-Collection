@@ -94,7 +94,7 @@ def update_console(module, array):
                 module,
                 array=Arrays(console_lock_enabled=new_state),
             )
-            check_response(res, module, "Enabling Console Lock failed")
+            check_response(res, module, "Enabling Console Lock")
     module.exit_json(changed=changed)
 
 

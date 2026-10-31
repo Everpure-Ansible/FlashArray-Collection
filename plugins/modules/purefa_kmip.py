@@ -181,7 +181,7 @@ def update_kmip(module, array):
             check_response(
                 res,
                 module,
-                f"Updating existing KMIP object {module.params['name']} failed",
+                f"Updating existing KMIP object {module.params['name']}",
             )
 
     module.exit_json(changed=changed)
@@ -203,9 +203,7 @@ def create_kmip(module, array):
     )
     if not module.check_mode:
         res = array.post_kmip(names=[module.params["name"]], kmip=kmip)
-        check_response(
-            res, module, f"Creating KMIP object {module.params['name']} failed"
-        )
+        check_response(res, module, f"Creating KMIP object {module.params['name']}")
     module.exit_json(changed=changed)
 
 

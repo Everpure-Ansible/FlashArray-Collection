@@ -645,6 +645,37 @@ class TestGenerateCapacityDict:
         assert result["data_reduction"] == 2.5
 
 
+def _offload_snapshot_array():
+    """An array with no local snapshots and one offloaded pod snapshot"""
+    mock_array = Mock()
+    mock_array.get_rest_version.return_value = "2.38"
+    mock_array.get_volume_snapshots.return_value = Mock(items=[])
+    mock_offload = Mock()
+    mock_offload.name = "offload1"
+    mock_array.get_offloads.return_value = Mock(items=[mock_offload])
+    remote_snap = Mock()
+    remote_snap.name = "offload1:realm::pod::vol.suffix"
+    remote_snap.source = Mock()
+    remote_snap.source.name = "realm::pod::vol"
+    remote_snap.suffix = "suffix"
+    remote_snap.provisioned = 1073741824
+    remote_snap.created = 1609459200000
+    mock_array.get_remote_volume_snapshots.return_value = Mock(
+        status_code=200, items=[remote_snap]
+    )
+    transfer = Mock(
+        data_transferred=4096,
+        completed=1609459260000,
+        physical_bytes_written=4096,
+        progress=1.0,
+    )
+    mock_array.get_remote_volume_snapshots_transfer.return_value = Mock(
+        items=[transfer]
+    )
+    mock_array.get_volume_snapshots_tags.return_value = Mock(items=[])
+    return mock_array
+
+
 class TestGenerateSnapDict:
     """Test cases for generate_snap_dict function"""
 
@@ -677,6 +708,24 @@ class TestGenerateSnapDict:
         assert "vol1.snap1" in result
         assert result["vol1.snap1"]["is_local"] is True
 
+    def test_remote_pod_snapshot_is_keyed_on_its_full_name(self):
+        """An offloaded pod or realm snapshot is keyed realm::pod::vol.suffix
+
+        The transfer is looked up by snapshot name, and only the offload
+        prefix is stripped from the key, so the "::" separators survive.
+        """
+        mock_array = _offload_snapshot_array()
+
+        result = generate_snap_dict(mock_array)
+
+        mock_array.get_remote_volume_snapshots_transfer.assert_called_once_with(
+            on="offload1", names=["offload1:realm::pod::vol.suffix"]
+        )
+        assert list(result) == ["realm::pod::vol.suffix"]
+        remote = result["realm::pod::vol.suffix"]["remote"]
+        assert remote[0]["source"] == "realm::pod::vol"
+        assert remote[0]["data_transferred"] == 4096
+
 
 class TestGenerateDelSnapDict:
     """Test cases for generate_del_snap_dict function"""
@@ -707,6 +756,18 @@ class TestGenerateDelSnapDict:
         result = generate_del_snap_dict(mock_array)
 
         assert "vol1.deleted_snap" in result
+
+    def test_remote_pod_snapshot_is_keyed_on_its_full_name(self):
+        """A destroyed offloaded pod snapshot keeps its "::" separators too"""
+        mock_array = _offload_snapshot_array()
+
+        result = generate_del_snap_dict(mock_array)
+
+        mock_array.get_remote_volume_snapshots_transfer.assert_called_once_with(
+            on="offload1", names=["offload1:realm::pod::vol.suffix"]
+        )
+        assert list(result) == ["realm::pod::vol.suffix"]
+        assert result["realm::pod::vol.suffix"]["remote"][0]["suffix"] == "suffix"
 
 
 class TestGenerateDelVolDict:
@@ -1673,13 +1734,24 @@ class TestGenerateFleetDict:
         # Need both get_fleets() and get_fleets_members()
         mock_fleet = Mock()
         mock_fleet.name = "test-fleet"
-        mock_array.get_fleets.return_value = Mock(items=[mock_fleet])
+        mock_array.get_fleets.return_value = Mock(status_code=200, items=[mock_fleet])
         mock_array.get_fleets_members.return_value = Mock(items=[mock_member])
 
         result = generate_fleet_dict(mock_array)
 
         assert "test-fleet" in result
         assert "members" in result["test-fleet"]
+        mock_array.get_fleets.assert_called_once_with()
+
+    def test_generate_fleet_dict_non_200_returns_empty(self):
+        """GET /fleets is 404 on an array without Fusion: report nothing"""
+        mock_array = Mock()
+        mock_array.get_fleets.return_value = Mock(status_code=404)
+
+        result = generate_fleet_dict(mock_array)
+
+        assert result == {}
+        mock_array.get_fleets_members.assert_not_called()
 
 
 class TestGenerateTgroupsDict:
@@ -1757,9 +1829,7 @@ class TestGeneratePresetDict:
         mock_preset.periodic_replication_configurations = []
         mock_preset.workload_tags = []
 
-        # Return response without errors attribute (or errors=None)
-        mock_response = Mock()
-        mock_response.errors = None
+        mock_response = Mock(status_code=200)
         mock_response.items = [mock_preset]
         mock_array.get_presets_workload.return_value = mock_response
 
@@ -1767,6 +1837,17 @@ class TestGeneratePresetDict:
 
         assert "preset-1" in result
         assert result["preset-1"]["workload_type"] == "database"
+
+    def test_generate_preset_dict_non_200_returns_empty(self):
+        """A failed read reports no presets instead of raising"""
+        mock_array = Mock()
+        mock_array.get_presets_workload.return_value = Mock(
+            status_code=404, errors=[Mock(message="Not found")]
+        )
+
+        result = generate_preset_dict(mock_array)
+
+        assert result == {}
 
 
 class TestGenerateWorkloadDict:
@@ -1787,12 +1868,23 @@ class TestGenerateWorkloadDict:
         mock_workload.created = 1609459200000  # Timestamp must be integer
         mock_workload.time_remaining = None
 
-        mock_array.get_workloads.return_value = Mock(items=[mock_workload])
+        mock_array.get_workloads.return_value = Mock(
+            status_code=200, items=[mock_workload]
+        )
 
         result = generate_workload_dict(mock_array)
 
         assert "workload-1" in result
         assert result["workload-1"]["status"] == "healthy"
+
+    def test_generate_workload_dict_non_200_returns_empty(self):
+        """A failed read reports no workloads instead of raising"""
+        mock_array = Mock()
+        mock_array.get_workloads.return_value = Mock(status_code=404)
+
+        result = generate_workload_dict(mock_array)
+
+        assert result == {}
 
 
 class TestGenerateRealmsDict:
@@ -3161,6 +3253,47 @@ class TestMainDefaultSection:
         info = self._run(["apps"])
         assert "default" not in info
         assert "apps" in info
+
+
+class TestMainFusionVersionGates:
+    """fleet is read from REST 2.38, presets and workloads only from 2.40
+
+    py-pure-client defines get_presets_workload and get_workloads from
+    FA_2_40, so dispatching them at 2.38 or 2.39 was an AttributeError.
+    """
+
+    @staticmethod
+    def _run(rest_version):
+        mock_module = Mock()
+        mock_module.params = {"gather_subset": ["fleet", "presets", "workloads"]}
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = rest_version
+        mock_array.get_fleets.return_value = Mock(status_code=200, items=[])
+        mock_array.get_presets_workload.return_value = Mock(status_code=200, items=[])
+        mock_array.get_workloads.return_value = Mock(status_code=200, items=[])
+        with patch(
+            "plugins.modules.purefa_info.AnsibleModule", return_value=mock_module
+        ), patch("plugins.modules.purefa_info.get_array", return_value=mock_array):
+            main()
+        return mock_array, mock_module.exit_json.call_args[1]["purefa_info"]
+
+    def test_presets_and_workloads_skipped_at_2_39(self):
+        mock_array, info = self._run("2.39")
+        mock_array.get_fleets.assert_called_once_with()
+        mock_array.get_presets_workload.assert_not_called()
+        mock_array.get_workloads.assert_not_called()
+        assert "fleet" in info
+        assert "presets" not in info
+        assert "workloads" not in info
+
+    def test_presets_and_workloads_gathered_at_2_40(self):
+        mock_array, info = self._run("2.40")
+        mock_array.get_fleets.assert_called_once_with()
+        mock_array.get_presets_workload.assert_called_once_with()
+        mock_array.get_workloads.assert_called_once_with()
+        assert info["fleet"] == {}
+        assert info["presets"] == {}
+        assert info["workloads"] == {}
 
 
 class TestPerformanceAttributesAreOptional:

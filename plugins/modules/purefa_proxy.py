@@ -92,7 +92,7 @@ def delete_proxy(module, array):
         changed = True
         if not module.check_mode:
             res = array.patch_support(support=SupportPatch(proxy=""))
-            check_response(res, module, "Delete proxy settings failed")
+            check_response(res, module, "Delete proxy settings")
     module.exit_json(changed=changed)
 
 
@@ -111,7 +111,7 @@ def create_proxy(module, array):
         changed = True
         if not module.check_mode:
             res = array.patch_support(support=SupportPatch(proxy=new_proxy))
-            check_response(res, module, "Set phone home proxy failed")
+            check_response(res, module, "Set phone home proxy")
 
     module.exit_json(changed=changed)
 

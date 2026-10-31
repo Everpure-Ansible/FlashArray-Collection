@@ -95,6 +95,12 @@ options:
         given a certificate signed by a trusted CA.
     type: bool
     default: false
+  use_proxy:
+    description:
+      - Honour the controller's C(https_proxy) environment like other Ansible
+        URL modules. Set to C(false) when the array must be reached directly.
+    type: bool
+    default: true
   timeout:
     description:
       - Seconds to wait for the array to answer.
@@ -179,7 +185,7 @@ EXAMPLES = r"""
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
   register: exposition
 
-- name: Fail when any hardware component is not ok
+- name: Fail when any installed hardware component is not ok
   everpure.flasharray.purefa_metrics:
     subset: array
     metrics:
@@ -187,9 +193,10 @@ EXAMPLES = r"""
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
   register: hardware
+  # A healthy array reports every empty bay and unused port as not_installed
   failed_when: >-
     hardware.purefa_metrics.purefa_hw_component_status.samples
-    | selectattr('labels.component_status', 'ne', 'ok')
+    | rejectattr('labels.component_status', 'in', ['ok', 'not_installed'])
     | list | length > 0
 """
 
@@ -457,6 +464,7 @@ def read_exposition(module):
         url,
         headers={"Authorization": "Bearer {0}".format(token)},
         method="GET",
+        use_proxy=module.params["use_proxy"],
         timeout=module.params["timeout"],
     )
     status = info["status"]
@@ -505,6 +513,7 @@ def main():
             include_samples=dict(type="bool", default=True),
             raw=dict(type="bool", default=False),
             validate_certs=dict(type="bool", default=False),
+            use_proxy=dict(type="bool", default=True),
             timeout=dict(type="int", default=60),
         )
     )

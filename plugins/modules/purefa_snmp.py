@@ -274,9 +274,7 @@ def delete_manager(module, array):
     changed = True
     if not module.check_mode:
         res = array.delete_snmp_managers(names=[module.params["name"]])
-        check_response(
-            res, module, f"Delete SNMP manager {module.params['name']} failed"
-        )
+        check_response(res, module, f"Delete SNMP manager {module.params['name']}")
     module.exit_json(changed=changed)
 
 

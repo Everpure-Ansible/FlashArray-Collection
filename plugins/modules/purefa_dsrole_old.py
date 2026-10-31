@@ -132,7 +132,7 @@ def update_role(module, array):
             check_response(
                 res,
                 module,
-                f"Update Directory Service Role {module.params['role']} failed",
+                f"Update Directory Service Role {module.params['role']}",
             )
     module.exit_json(changed=changed)
 
@@ -148,7 +148,7 @@ def delete_role(module, array):
         check_response(
             res,
             module,
-            f"Delete Directory Service Role {module.params['role']} failed",
+            f"Delete Directory Service Role {module.params['role']}",
         )
     module.exit_json(changed=changed)
 
@@ -169,7 +169,7 @@ def create_role(module, array):
             check_response(
                 res,
                 module,
-                f"Create Directory Service Role {module.params['role']} failed",
+                f"Create Directory Service Role {module.params['role']}",
             )
     module.exit_json(changed=changed)
 

@@ -300,7 +300,7 @@ def rename_vgroup(module, array):
                 names=[module.params["name"]],
                 volume_group=VolumeGroupPatch(name=module.params["rename"]),
             )
-            check_response(res, module, f"Rename to {module.params['rename']} failed")
+            check_response(res, module, f"Rename to {module.params['rename']}")
     module.exit_json(changed=changed)
 
 
@@ -324,9 +324,7 @@ def make_vgroup(module, array):
                         )
                     ),
                 )
-                check_response(
-                    res, module, f"Vgroup {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Vgroup {module.params['name']} creation")
         else:
             module.fail_json(
                 msg="Bandwidth QoS value {0} out of range.".format(
@@ -349,9 +347,7 @@ def make_vgroup(module, array):
                         )
                     ),
                 )
-                check_response(
-                    res, module, f"Vgroup {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Vgroup {module.params['name']} creation")
         else:
             module.fail_json(
                 msg="IOPs QoS value {0} out of range.".format(module.params["iops_qos"])
@@ -378,9 +374,7 @@ def make_vgroup(module, array):
                         )
                     ),
                 )
-                check_response(
-                    res, module, f"Vgroup {module.params['name']} creation failed"
-                )
+                check_response(res, module, f"Vgroup {module.params['name']} creation")
         else:
             module.fail_json(msg="IOPs or Bandwidth QoS value out of range.")
     else:
@@ -394,9 +388,7 @@ def make_vgroup(module, array):
                 names=[module.params["name"]],
                 volume_group=VolumeGroupPost(),
             )
-            check_response(
-                res, module, f"Vgroup {module.params['name']} creation failed"
-            )
+            check_response(res, module, f"Vgroup {module.params['name']} creation")
     if (
         LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version)
         and module.params["priority_operator"] is not None
@@ -474,7 +466,7 @@ def make_multi_vgroups(module, array):
         check_response(
             res,
             module,
-            f"Multi-Vgroup {module.params['name']}#{module.params['suffix']} creation failed",
+            f"Multi-Vgroup {module.params['name']}#{module.params['suffix']} creation",
         )
         if (
             LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version)
@@ -582,7 +574,7 @@ def update_vgroup(module, array):
                 check_response(
                     res,
                     module,
-                    f"Vgroup {module.params['name']} Bandwidth QoS update failed",
+                    f"Vgroup {module.params['name']} Bandwidth QoS update",
                 )
 
     if module.params.get("iops_qos") is not None:
@@ -602,7 +594,7 @@ def update_vgroup(module, array):
                 check_response(
                     res,
                     module,
-                    f"Vgroup {module.params['name']} IOPS QoS update failed",
+                    f"Vgroup {module.params['name']} IOPS QoS update",
                 )
     module.exit_json(changed=changed)
 
@@ -619,9 +611,7 @@ def recover_vgroup(module, array):
             names=[module.params["name"]],
             volume_group=VolumeGroupPatch(destroyed=False),
         )
-        check_response(
-            res, module, f"Recovery of volume group {module.params['name']} failed"
-        )
+        check_response(res, module, f"Recovery of volume group {module.params['name']}")
 
     module.exit_json(changed=changed)
 
@@ -637,9 +627,7 @@ def eradicate_vgroup(module, array):
             module,
             names=[module.params["name"]],
         )
-        check_response(
-            res, module, f"Eradicating vgroup {module.params['name']} failed"
-        )
+        check_response(res, module, f"Eradicating vgroup {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -655,9 +643,7 @@ def delete_vgroup(module, array):
             names=[module.params["name"]],
             volume_group=VolumeGroupPatch(destroyed=True),
         )
-        check_response(
-            res, module, f"Deletion of volume group {module.params['name']} failed"
-        )
+        check_response(res, module, f"Deletion of volume group {module.params['name']}")
     if module.params["eradicate"]:
         eradicate_vgroup(module, array)
 

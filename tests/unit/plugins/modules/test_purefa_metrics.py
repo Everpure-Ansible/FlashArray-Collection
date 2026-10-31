@@ -41,6 +41,7 @@ from plugins.modules.purefa_metrics import (
     _parse_labels,
     _parse_value,
     _split_sample,
+    main,
     parse_exposition,
     read_exposition,
     select_metrics,
@@ -77,6 +78,7 @@ def _params(**overrides):
         "include_samples": True,
         "raw": False,
         "validate_certs": False,
+        "use_proxy": True,
         "timeout": 60,
     }
     params.update(overrides)
@@ -505,3 +507,46 @@ class TestReadExposition:
         assert mock_fetch.call_args[1]["headers"] == {
             "Authorization": "Bearer env-token"
         }
+
+    @patch("plugins.modules.purefa_metrics.fetch_url")
+    def test_the_proxy_environment_is_honoured_by_default(self, mock_fetch):
+        """Behave like ansible.builtin.uri unless told otherwise"""
+        mock_fetch.return_value = self._fetch(body=EXPOSITION)
+        module = _module()
+
+        read_exposition(module)
+
+        assert mock_fetch.call_args[1]["use_proxy"] is True
+
+    @patch("plugins.modules.purefa_metrics.fetch_url")
+    def test_use_proxy_false_reaches_the_array_directly(self, mock_fetch):
+        """The rest of the collection never reads https_proxy - allow matching it"""
+        mock_fetch.return_value = self._fetch(body=EXPOSITION)
+        module = _module(use_proxy=False)
+
+        read_exposition(module)
+
+        assert mock_fetch.call_args[1]["use_proxy"] is False
+
+
+class TestMain:
+    """The argument spec, which the Mock module above bypasses"""
+
+    @patch("plugins.modules.purefa_metrics.fetch_url")
+    @patch("plugins.modules.purefa_metrics.AnsibleModule")
+    @patch("plugins.modules.purefa_metrics.purefa_argument_spec", return_value={})
+    def test_use_proxy_is_a_bool_defaulting_to_true(
+        self, mock_spec, mock_ansible_module, mock_fetch
+    ):
+        response = Mock()
+        response.read.return_value = EXPOSITION.encode()
+        mock_fetch.return_value = (
+            response,
+            {"status": 200, "content-type": "text/plain", "msg": "", "body": b""},
+        )
+        mock_ansible_module.return_value = _module()
+
+        main()
+
+        argument_spec = mock_ansible_module.call_args[0][0]
+        assert argument_spec["use_proxy"] == {"type": "bool", "default": True}

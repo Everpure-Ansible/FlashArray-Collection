@@ -1791,6 +1791,43 @@ class TestCreatePgsnapshot:
         assert call_kwargs.get("replicate") is True
         assert "context_names" not in call_kwargs
 
+    @patch("plugins.modules.purefa_pgsnap.check_response")
+    @patch("plugins.modules.purefa_pgsnap.LooseVersion", side_effect=LooseVersion)
+    def test_create_pgsnapshot_error_operation(self, mock_lv, mock_check_response):
+        """Test create_pgsnapshot's operation string does not end in "failed"
+
+        check_response appends " failed. Error: ..." itself, so the old string
+        produced "Snapshot of pgroup pg1 failed failed. Error: ...".
+        """
+        from plugins.modules.purefa_pgsnap import create_pgsnapshot
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "pg1",
+            "suffix": "snap1",
+            "context": "",
+            "throttle": False,
+            "now": False,
+            "apply_retention": False,
+            "remote": False,
+        }
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_pg = Mock()
+        mock_pg.target_count = 0
+        mock_array.get_protection_groups.return_value = Mock(
+            status_code=200, items=[mock_pg]
+        )
+        mock_res = Mock(status_code=200, items=[Mock(suffix="snap1")])
+        mock_array.post_protection_group_snapshots.return_value = mock_res
+
+        create_pgsnapshot(mock_module, mock_array)
+
+        mock_check_response.assert_called_once_with(
+            mock_res, mock_module, "Snapshot of pgroup pg1"
+        )
+
 
 class TestMain:
     """Test main function branches"""
@@ -1834,6 +1871,128 @@ class TestMain:
 
         mock_module.fail_json.assert_called_once()
         assert "does not exist" in str(mock_module.fail_json.call_args)
+
+    @patch("plugins.modules.purefa_pgsnap.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_pgsnap.get_array")
+    @patch("plugins.modules.purefa_pgsnap.AnsibleModule")
+    def test_main_absent_pgroup_not_found_no_change(
+        self, mock_ansible, mock_get_array, mock_lv
+    ):
+        """Test main exits unchanged for state=absent when the pgroup is gone
+
+        A local snapshot cannot outlive its protection group, so the snapshot
+        is already absent. main() used to fail with "does not exist" before
+        it looked at state, which made the no-op branch unreachable.
+        """
+        from plugins.modules.purefa_pgsnap import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "gone_pg",
+            "suffix": "snap1",
+            "state": "absent",
+            "offload": None,
+            "restore": None,
+            "target": None,
+            "context": "",
+            "eradicate": True,
+        }
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_protection_groups.return_value = Mock(status_code=404)
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_array.get_protection_groups.assert_called_once_with(names=["gone_pg"])
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.fail_json.assert_not_called()
+        mock_array.patch_protection_group_snapshots.assert_not_called()
+        mock_array.delete_protection_group_snapshots.assert_not_called()
+
+    @patch("plugins.modules.purefa_pgsnap.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_pgsnap.get_array")
+    @patch("plugins.modules.purefa_pgsnap.AnsibleModule")
+    def test_main_present_pgroup_not_found_still_fails(
+        self, mock_ansible, mock_get_array, mock_lv
+    ):
+        """Test main still fails for state=present when the pgroup is gone"""
+        from plugins.modules.purefa_pgsnap import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "gone_pg",
+            "suffix": "snap1",
+            "state": "present",
+            "offload": None,
+            "restore": None,
+            "target": None,
+            "context": "",
+            "eradicate": False,
+        }
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_protection_groups.return_value = Mock(status_code=404)
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_array.get_protection_groups.assert_called_once_with(names=["gone_pg"])
+        mock_module.fail_json.assert_called_once_with(
+            msg="Protection Group gone_pg does not exist."
+        )
+        mock_module.exit_json.assert_not_called()
+        mock_array.post_protection_group_snapshots.assert_not_called()
+
+    @patch("plugins.modules.purefa_pgsnap.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_pgsnap.get_array")
+    @patch("plugins.modules.purefa_pgsnap.AnsibleModule")
+    def test_main_absent_offload_pgroup_not_found_still_fails(
+        self, mock_ansible, mock_get_array, mock_lv
+    ):
+        """Test main still fails for state=absent with offload when the pgroup is gone
+
+        An offloaded snapshot can outlive the source group, so a missing
+        group is not evidence that the snapshot is absent.
+        """
+        from plugins.modules.purefa_pgsnap import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "arrayA:gone_pg",
+            "suffix": "snap1",
+            "state": "absent",
+            "offload": "nfs-target",
+            "restore": None,
+            "target": None,
+            "context": "",
+            "eradicate": False,
+        }
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_protection_groups.return_value = Mock(status_code=404)
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once_with(
+            msg="Protection Group arrayA:gone_pg does not exist."
+        )
+        mock_module.exit_json.assert_not_called()
+        mock_array.patch_remote_protection_group_snapshots.assert_not_called()
+        mock_array.delete_remote_protection_group_snapshots.assert_not_called()
 
     @patch("plugins.modules.purefa_pgsnap.LooseVersion", side_effect=LooseVersion)
     @patch("plugins.modules.purefa_pgsnap.get_array")
