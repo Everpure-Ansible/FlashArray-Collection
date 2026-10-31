@@ -51,8 +51,9 @@ options:
     - Only valid with I(state=present). The preset I(name) must exist, or
       already have been renamed to I(new_name) by an earlier run, and
       I(new_name) must not already be in use by another preset.
-    - Everything else in the task is then applied to the renamed preset in the
-      same run.
+    - Any other change in the task is made first, under the old name, and the
+      rename last. If the rename is then refused, the task fails and says that
+      the content was replaced but the rename was not made.
     - Follows the same naming rules as I(name).
     type: str
   state:
@@ -111,7 +112,8 @@ options:
       storage_class:
         description:
         - The storage class the placement can be deployed to.
-        - Give exactly one of I(name) or I(parameter).
+        - Give exactly one of I(name) or I(parameter). A parameter reference
+          written as a template in I(name) is refused.
         - The array does not check that the storage class exists. A misspelt
           name is accepted when the preset is saved and fails only when a
           workload is created from it.
@@ -138,6 +140,8 @@ options:
         - The fleet member the placement is deployed to.
         - At most one. When omitted the target is the fleet member that receives
           the workload request.
+        - Give exactly one of I(name) or I(parameter) in each entry. A
+          parameter reference written as a template in I(name) is refused.
         - Each entry must name a member that exists even when
           I(skip_verify_deployable) is true.
         - Requires REST API 2.54 or higher.
@@ -191,20 +195,27 @@ options:
         type: str
       snapshots:
         description:
-        - Names of the entries in I(snapshots) to apply to these volumes.
+        - Names of the entries in I(snapshots) to apply to these volumes, each
+          at most once.
         type: list
         elements: str
       replications:
         description:
-        - Names of the entries in I(replications) to apply to these volumes.
+        - Names of the entries in I(replications) to apply to these volumes,
+          each at most once.
         type: list
         elements: str
       naming_template:
         description:
-        - Naming template for the volumes created from this configuration. The
-          array supplies a default when this is omitted.
-        - The array's own default is left alone, and not compared, while this is
-          omitted.
+        - Naming template for the volumes created from this configuration.
+        - When omitted, a configuration that is already on the fleet keeps the
+          template it has, and a new one gets the array's default. To change
+          the template set it explicitly. To return to the default set it to
+          the default pattern.
+        - "The default pattern on Purity//FA 6.10.6 is
+          {{functions.left(workload.name,
+          25)}}-{{functions.left(workload.configuration.name,
+          25)}}-{{functions.pad_left(workload.configuration.index, 4)}}."
         type: str
   qos:
     description:
@@ -229,18 +240,24 @@ options:
       bandwidth_limit:
         description:
         - Bandwidth limit in bytes per second shared by all the volumes in the
-          placement. At most 512 GB/s.
+          placement. From 1048576 (1 MiB/s) to 549755813888 (512 GiB/s).
         - A whole number, or a parameter reference. See the notes for how to
           write one.
         type: str
       naming_template:
         description:
-        - Naming template for the QoS policy that is created. The array supplies
-          a default when this is omitted.
+        - Naming template for the QoS policy that is created.
+        - When omitted, a configuration that is already on the fleet keeps the
+          template it has, and a new one gets the array's default. To change
+          the template set it explicitly. To return to the default set it to
+          the default pattern.
+        - "The default pattern on Purity//FA 6.10.6 is
+          {{functions.left(workload.name,
+          25)}}-{{functions.left(workload.configuration.name, 25)}}."
         type: str
   snapshots:
     description:
-    - Snapshot schedule configurations.
+    - Snapshot schedule configurations. At most two entries.
     - Each must be used by at least one entry in I(volumes).
     type: list
     elements: dict
@@ -264,6 +281,8 @@ options:
         description:
         - The frequency and retention of the snapshots. One or two rules.
         - Intervals of all rules must be multiples of each other.
+        - A rule has no time zone. The array refuses one on a FlashArray
+          preset, so there is no option for it.
         type: list
         elements: dict
         required: true
@@ -299,12 +318,16 @@ options:
             type: str
       naming_template:
         description:
-        - Naming template for the snapshot policy that is created. The array
-          supplies a default when this is omitted.
+        - Naming template for the snapshot policy that is created.
+        - When omitted, a configuration that is already on the fleet keeps the
+          template it has, and a new one gets the array's default. To change
+          the template set it explicitly. To return to the default set it to
+          the default pattern, which is the same as for I(qos).
         type: str
   replications:
     description:
-    - Periodic replication (snapshot replication) configurations.
+    - Periodic replication (snapshot replication) configurations. At most two
+      entries.
     - Each must be used by at least one entry in I(volumes).
     type: list
     elements: dict
@@ -319,7 +342,8 @@ options:
         description:
         - The remote array snapshots are replicated to. The array accepts
           any name here, including the array the volume is on, so check it.
-        - Give exactly one of I(name) or I(parameter).
+        - Give exactly one of I(name) or I(parameter). A parameter reference
+          written as a template in I(name) is refused.
         type: dict
         required: true
         suboptions:
@@ -373,8 +397,11 @@ options:
             type: str
       naming_template:
         description:
-        - Naming template for the replication policy that is created. The array
-          supplies a default when this is omitted.
+        - Naming template for the replication policy that is created.
+        - When omitted, a configuration that is already on the fleet keeps the
+          template it has, and a new one gets the array's default. To change
+          the template set it explicitly. To return to the default set it to
+          the default pattern, which is the same as for I(qos).
         type: str
   parameters:
     description:
@@ -407,12 +434,20 @@ options:
         type: str
       subtype:
         description:
-        - Hint to the GUI about how to prompt for the value. C(size) offers
-          a size input with common units.
-        - The array fails with an internal error for any other value, so only
-          C(size) is accepted.
+        - Hint to the GUI about the kind of quantity the value is, which it
+          uses to prompt for the value with suitable units. C(size) is for a
+          number of bytes, such as I(volumes.provisioned_size), and prompts
+          with size units. C(iops) and C(bandwidth) are for the two QoS
+          limits, C(duration) for an interval in milliseconds such as
+          I(every) and I(keep_for), and C(time) for a time of day in
+          milliseconds since midnight, such as I(at).
+        - Only valid for I(type=integer). The array refuses a subtype on any
+          other type.
+        - The choices are the five values Purity//FA 6.10.6 accepts. The
+          array fails with an internal error for any other value, so a value
+          outside the list is refused before any request is made.
         type: str
-        choices: [ size ]
+        choices: [ size, iops, bandwidth, time, duration ]
       default:
         description:
         - Value used when none is given.
@@ -446,6 +481,12 @@ options:
           I(replications.target).
         - The array fails with an internal error for any other value, so only
           these two are accepted.
+        - The user may choose any resource of that kind. Purity//FA 6.10.6
+          accepts exactly one allowed value for the parameter, naming only the
+          resource type, and refuses a named resource in it, so there is no
+          option to restrict the choice. A preset on the fleet whose parameter
+          is restricted to named resources differs from the task and is
+          replaced.
         type: str
         choices: [ storage-classes, remote-arrays ]
   tags:
@@ -487,28 +528,27 @@ options:
     - This setting is an instruction for the request and is not stored in the
       preset. It is not part of the comparison made to decide whether the preset
       changed.
-    - Requires REST API 2.51 or higher.
     type: bool
     default: false
 extends_documentation_fragment:
 - everpure.flasharray.everpure.fa
-requirements:
-- py-pure-client >= 1.88.0
 notes:
-- Requires Purity//FA REST API 2.40 or higher, 2.51 for I(skip_verify_deployable)
-  and 2.54 for I(placement.targets).
+- Requires Purity//FA REST API 2.51 or higher, 2.54 for I(placement.targets).
 - Writing a preset needs a fleet-wide identity, that is a directory user, and an
   API token made for it. A token made for a local array user can read
   presets but every write fails with a 403 error, and the module says so.
 - The preset is replaced as a whole. Anything you leave out of the task is empty
   after the run. That is how a section is removed, and it also means an edit made
   to the preset in the GUI that the task does not describe is lost the next
-  time the task changes something.
+  time the task changes something. The one exception is a configuration's
+  naming template, which is kept when the task leaves it out.
 - The module decides whether anything changed by comparing the preset on the
   fleet, read back from the array, with the preset described by the task. The
-  array adds defaults, such as naming templates, and spells numbers as text. These
-  are ignored. The array's own naming templates are only compared once you set
-  I(naming_template) for that configuration.
+  array spells numbers as text and fills in defaults, which are not counted as
+  differences. A naming template the task leaves out is taken from the
+  configuration of the same name and kind on the fleet, both for the
+  comparison and for the request, so a replacement made for another reason does
+  not reset it.
 - Parameter references. Fields that accept one take a value such as
   C({{ parameters.volume_size }}), which the array fills in when a workload
   is created. Ansible would expand that text itself, so it has to be protected,
@@ -669,7 +709,7 @@ EXAMPLES = r"""
 
 - name: Delete a preset
   everpure.flasharray.purefa_preset:
-    name: app-tiny
+    name: app-small
     state: absent
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
@@ -704,8 +744,9 @@ preset:
             sample: ['volume_configurations', 'workload_tags']
 diff:
     description: The preset before and after, as text, in the module's normalised
-        form. The array's own defaults are not shown for a configuration that
-        the task does not describe.
+        form. A naming template the task leaves out is shown on both sides as
+        it is on the fleet. On a rename the old and new names are part
+        of the text, so the change shows even when nothing else differs.
     type: dict
     returned: when running with C(--diff)
 """
@@ -734,8 +775,9 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
     check_api_version,
 )
 
-MIN_REQUIRED_API_VERSION = "2.40"
-SKIP_VERIFY_API_VERSION = "2.51"
+# 2.51 brought policy_action, naming_patterns, rule suffixes and
+# skip_verify_deployable, all of which every request may carry
+MIN_REQUIRED_API_VERSION = "2.51"
 TARGETS_API_VERSION = "2.54"
 MIN_SDK_VERSION = "1.88.0"
 
@@ -758,7 +800,9 @@ WORKLOAD_TYPES = [
 ]
 PARAMETER_TYPES = ["string", "integer", "boolean", "resource_reference"]
 REFERENCE_TYPES = ["storage-classes", "remote-arrays"]
-SUBTYPES = ["size"]
+# The subtypes Purity//FA 6.10.6 accepts on an integer parameter. Any other
+# value is a server error, and any subtype on another type is refused
+SUBTYPES = ["size", "iops", "bandwidth", "time", "duration"]
 POLICY_ACTIONS = ["always_create", "create_or_reuse"]
 
 # Limits found by trying them on a fleet. The SDK documents 5 for QoS
@@ -767,11 +811,17 @@ MAX_VOLUMES = 5
 MAX_TOTAL_VOLUME_COUNT = 500
 MAX_QOS = 1
 MAX_RULES = 2
+# The SDK models hold at most two snapshot and two replication configurations
+# and refuse a third before any request is made.
+MAX_SNAPSHOT_CONFIGS = 2
+MAX_REPLICATION_CONFIGS = 2
 MAX_ALLOWED_VALUES = 5
 MAX_PROVISIONED_SIZE = 4503599627370496
 MIN_IOPS = 100
 MAX_IOPS = 100000000
+MIN_BANDWIDTH = 1048576
 MAX_BANDWIDTH = 512 * 1024**3
+DEFAULT_COUNT = "1"
 MAX_DESCRIPTION = 1024
 MAX_PARAMETER_DISPLAY_NAME = 64
 MAX_STRING_VALUE = 64
@@ -873,10 +923,22 @@ def _number(errors, where, value, low=None, high=None, multiple_of=None):
 
 
 def _check_reference(errors, where, ref):
-    """Exactly one of name and parameter"""
+    """Exactly one of name and parameter, and the name is a name, not a template"""
     ref = ref or {}
-    if bool(ref.get("name")) == bool(ref.get("parameter")):
+    name = ref.get("name")
+    if bool(name) == bool(ref.get("parameter")):
         errors.append("%s needs exactly one of name and parameter" % where)
+    if name and "{{" in str(name):
+        errors.append(
+            "%s name '%s' is a parameter reference. Give the parameter's name "
+            "with parameter instead of name" % (where, name)
+        )
+
+
+def _volume_count(volume):
+    """The count of a volume configuration, one when the task gives none"""
+    count = volume.get("count")
+    return DEFAULT_COUNT if count is None else count
 
 
 def _check_rules(errors, where, rules):
@@ -959,12 +1021,13 @@ def _check_parameter(errors, where, param):
     minimum = param.get("minimum")
     maximum = param.get("maximum")
     rtype = param.get("resource_type")
-    # One constraint block, and it has to be the one for the type
+    # One constraint block, and it has to be the one for the type. The subtype
+    # is a hint about the unit of a number, so only an integer takes one
     misplaced = {
-        "string": ("minimum", "maximum", "resource_type"),
+        "string": ("minimum", "maximum", "resource_type", "subtype"),
         "integer": ("resource_type",),
-        "boolean": ("allowed_values", "minimum", "maximum", "resource_type"),
-        "resource_reference": ("allowed_values", "minimum", "maximum"),
+        "boolean": ("allowed_values", "minimum", "maximum", "resource_type", "subtype"),
+        "resource_reference": ("allowed_values", "minimum", "maximum", "subtype"),
     }.get(ptype, ())
     for field in misplaced:
         value = param.get(field)
@@ -1087,6 +1150,16 @@ def validate_preset(params):
         )
     if len(qos) > MAX_QOS:
         errors.append("qos has %d entries, at most %d is allowed" % (len(qos), MAX_QOS))
+    if len(snapshots) > MAX_SNAPSHOT_CONFIGS:
+        errors.append(
+            "snapshots has %d entries, at most %d are allowed"
+            % (len(snapshots), MAX_SNAPSHOT_CONFIGS)
+        )
+    if len(replications) > MAX_REPLICATION_CONFIGS:
+        errors.append(
+            "replications has %d entries, at most %d are allowed"
+            % (len(replications), MAX_REPLICATION_CONFIGS)
+        )
 
     # Configuration names are shared by every kind of configuration
     names = []
@@ -1157,7 +1230,7 @@ def validate_preset(params):
     used_replications = set()
     for volume in volumes:
         where = "volume '%s'" % volume.get("name")
-        count = _number(errors, where + " count", volume.get("count", "1"), low=1)
+        count = _number(errors, where + " count", _volume_count(volume), low=1)
         if count is None:
             countable = False
         else:
@@ -1176,20 +1249,28 @@ def validate_preset(params):
                 "%s refers to placement '%s', which is not defined. The placement "
                 "is '%s'" % (where, vplace, placement_name)
             )
-        for sname in volume.get("snapshots") or []:
-            if sname not in snapshot_names:
-                errors.append(
-                    "%s refers to snapshot configuration '%s', which is not "
-                    "defined in snapshots" % (where, sname)
-                )
-            used_snapshots.add(sname)
-        for rname in volume.get("replications") or []:
-            if rname not in replication_names:
-                errors.append(
-                    "%s refers to replication configuration '%s', which is not "
-                    "defined in replications" % (where, rname)
-                )
-            used_replications.add(rname)
+        for kind, listed, defined_names, used in (
+            ("snapshot", volume.get("snapshots") or [], snapshot_names, used_snapshots),
+            (
+                "replication",
+                volume.get("replications") or [],
+                replication_names,
+                used_replications,
+            ),
+        ):
+            for cname in listed:
+                if cname not in defined_names:
+                    errors.append(
+                        "%s refers to %s configuration '%s', which is not defined "
+                        "in %ss" % (where, kind, cname, kind)
+                    )
+                used.add(cname)
+            for cname in sorted(set(listed)):
+                if listed.count(cname) > 1:
+                    errors.append(
+                        "%s lists %s configuration '%s' more than once"
+                        % (where, kind, cname)
+                    )
     if countable and total > MAX_TOTAL_VOLUME_COUNT:
         errors.append(
             "the volume counts add up to %d, at most %d are allowed"
@@ -1206,7 +1287,7 @@ def validate_preset(params):
             errors,
             where + " bandwidth_limit",
             item.get("bandwidth_limit"),
-            1,
+            MIN_BANDWIDTH,
             MAX_BANDWIDTH,
         )
         if placement and item.get("name") != placement.get("qos"):
@@ -1414,7 +1495,7 @@ def build_body(params):
         "volume_configurations": [
             {
                 "name": v["name"],
-                "count": str(v.get("count") if v.get("count") is not None else "1"),
+                "count": str(_volume_count(v)),
                 "provisioned_size": str(v["provisioned_size"]),
                 "placement_configurations": [v.get("placement") or placement_name],
                 "snapshot_configurations": v.get("snapshots"),
@@ -1490,10 +1571,24 @@ def _canonical_reference(ref):
 
 
 def _canonical_resource_reference(constraint):
-    allowed = constraint.get("allowed_values") or []
+    """A resource reference constraint as its allowed values and default name
+
+    Every allowed value is kept, by resource type and name, so that a parameter
+    the fleet restricts to named resources, which this module cannot write, is
+    not taken for the unrestricted one it can. Ids are the array's own.
+    """
     out = {}
-    if allowed and allowed[0].get("resource_type"):
-        out["resource_type"] = allowed[0]["resource_type"]
+    allowed = []
+    for entry in constraint.get("allowed_values") or []:
+        entry = _prune(
+            {"name": entry.get("name"), "resource_type": entry.get("resource_type")}
+        )
+        if entry:
+            allowed.append(entry)
+    if allowed:
+        out["allowed_values"] = sorted(
+            allowed, key=lambda e: (e.get("resource_type", ""), e.get("name", ""))
+        )
     default = constraint.get("default") or {}
     if default.get("name"):
         out["default"] = default["name"]
@@ -1572,19 +1667,36 @@ def normalise_preset(preset):
     return out
 
 
-def ignore_unrequested_naming(actual, desired):
-    """Drop the array's default naming templates where the task has not chosen one
+def carry_over_naming(body, existing):
+    """The body with the fleet's naming templates where the task chose none
 
-    The array fills a naming template into every configuration. Comparing it where the
-    task never set one would show a change on every run.
+    A replacement sends the whole preset, and a configuration sent without a
+    naming template gets the array's default, so a task that never mentions
+    templates would reset a custom one every time it changed anything else.
+    Instead, a configuration of the same name and kind that is already on the
+    fleet lends its template to the body. The template then takes part in the
+    comparison like any other field. A configuration the fleet does not have is
+    sent without one, and gets the array's default.
     """
+    if not existing:
+        return body
+    body = copy.deepcopy(body)
     for section in CONFIG_SECTIONS:
-        wanted = {c.get("name"): c for c in desired.get(section, [])}
-        for config in actual.get(section, []):
-            match = wanted.get(config.get("name"))
-            if match is not None and "naming_patterns" not in match:
-                config.pop("naming_patterns", None)
-    return actual
+        stored = {
+            config.get("name"): config.get("naming_patterns")
+            for config in existing.get(section) or []
+        }
+        for config in body.get(section) or []:
+            if "naming_patterns" in config:
+                continue
+            templates = [
+                {"template": pattern["template"]}
+                for pattern in stored.get(config.get("name")) or []
+                if isinstance(pattern, dict) and pattern.get("template")
+            ]
+            if templates:
+                config["naming_patterns"] = templates
+    return body
 
 
 def changed_sections(before, after):
@@ -1612,9 +1724,9 @@ def not_a_block_preset(preset):
 class Decision(NamedTuple):
     """What a run does, as separate steps that can combine
 
-    rename moves the preset to new_name before the write. write is create or
-    replace, or None for nothing to write. target is the name the preset has by
-    the end.
+    write is create or replace, or None for nothing to write. rename moves the
+    preset to new_name, after the write, so that a refused write leaves the
+    fleet as it was. target is the name the preset has by the end.
     """
 
     fail: str
@@ -1682,7 +1794,12 @@ def _is_absent(response):
     return NOT_FOUND_TEXT in _error_text(response).lower()
 
 
-def _fail_response(module, response, operation, write=False):
+def _fail_response(module, response, operation, write=False, changed=False):
+    """Fail with every message the array gave
+
+    changed says whether an earlier step of the same run already altered the
+    fleet, such as a replacement made before a rename that was then refused.
+    """
     message = "%s failed. Error: %s" % (operation, _error_text(response))
     status = getattr(response, "status_code", None)
     if write and status == 403:
@@ -1690,7 +1807,7 @@ def _fail_response(module, response, operation, write=False):
             ". Writing a preset needs a fleet-wide (directory) identity. A "
             "token for a local array user can read presets but not change them"
         )
-    module.fail_json(msg=message, status_code=status, changed=False)
+    module.fail_json(msg=message, status_code=status, changed=changed)
 
 
 def _read_fleet_name(module, array):
@@ -1707,21 +1824,45 @@ def _read_fleet_name(module, array):
     return fleets[0].name
 
 
-def _clean_name(module, fleet, option):
-    """A preset name without the fleet prefix, checked against the naming rules"""
+def _split_name(name):
+    """A preset name as its fleet prefix, or None, and the bare name"""
+    prefix, colon, bare = name.partition(":")
+    if colon:
+        return prefix, bare
+    return None, name
+
+
+def _check_name(module, option):
+    """Fail when a name option breaks the naming rules
+
+    This needs nothing from the array, so it runs before the array is reached.
+    Whether a prefix is the fleet's name is checked in _clean_name, once the
+    fleet is known.
+    """
     name = module.params.get(option)
     if not name:
-        return name
-    prefix = fleet + ":"
-    if name.startswith(prefix):
-        name = name[len(prefix) :]
-    if not PRESET_NAME_RE.fullmatch(name) or name.isdigit():
+        return
+    prefix, bare = _split_name(name)
+    if prefix == "" or not PRESET_NAME_RE.fullmatch(bare) or bare.isdigit():
         module.fail_json(
             msg="Invalid preset %s '%s'. A name is 1 to 63 letters, numbers or -, "
             "beginning and ending with a letter or number, and not made up of "
             "digits alone." % (option, name)
         )
-    return name
+
+
+def _clean_name(module, fleet, option):
+    """A preset name without the fleet prefix"""
+    name = module.params.get(option)
+    if not name:
+        return name
+    prefix, bare = _split_name(name)
+    if prefix is not None and prefix != fleet:
+        module.fail_json(
+            msg="Invalid preset %s '%s'. The only prefix a preset name may carry "
+            "is the name of the fleet, '%s:'." % (option, name, fleet)
+        )
+    return bare
 
 
 def _as_dict(item):
@@ -1730,7 +1871,7 @@ def _as_dict(item):
     return item.to_dict()
 
 
-def _read_preset(module, array, fleet, name):
+def _read_preset(module, array, fleet, name, changed=False):
     """The preset as a dict, or None when the fleet has none of that name"""
     res = array.get_presets_workload(names=[name], context_names=[fleet])
     if res.status_code == 200:
@@ -1738,41 +1879,75 @@ def _read_preset(module, array, fleet, name):
         return _as_dict(items[0]) if items else None
     if _is_absent(res):
         return None
-    _fail_response(module, res, "Reading preset %s" % name)
+    _fail_response(module, res, "Reading preset %s" % name, changed=changed)
+
+
+def _model(module, model_class, body, operation):
+    """The SDK's model of the body, or a clean failure when the SDK refuses it
+
+    The models check the body before any request is made. The validator should
+    have found everything they would, so this is the net under it. Nothing has
+    been written when a model is built, so the failure is not a change.
+    """
+    try:
+        return model_class(**body)
+    except (TypeError, ValueError) as err:
+        module.fail_json(
+            msg="%s failed. The py-pure-client model rejected the preset: %s"
+            % (operation, err),
+            changed=False,
+        )
 
 
 def _create_preset(module, array, fleet, name, body):
     kwargs = {}
     if module.params["skip_verify_deployable"]:
         kwargs["skip_verify_deployable"] = True
+    operation = "Creating preset %s" % name
+    preset = _model(module, PresetWorkloadPost, body, operation)
     res = array.post_presets_workload(
-        names=[name], preset=PresetWorkloadPost(**body), context_names=[fleet], **kwargs
+        names=[name], preset=preset, context_names=[fleet], **kwargs
     )
     if res.status_code != 200:
-        _fail_response(module, res, "Creating preset %s" % name, write=True)
+        _fail_response(module, res, operation, write=True)
 
 
 def _replace_preset(module, array, fleet, name, body):
+    """Replace the preset under the name it has now
+
+    This is the first write of a run, so a refusal leaves the fleet as it was.
+    """
     kwargs = {}
     if module.params["skip_verify_deployable"]:
         kwargs["skip_verify_deployable"] = True
+    operation = "Replacing preset %s" % name
+    preset = _model(module, PresetWorkload, body, operation)
     res = array.put_presets_workload(
-        names=[name], preset=PresetWorkload(**body), context_names=[fleet], **kwargs
+        names=[name], preset=preset, context_names=[fleet], **kwargs
     )
     if res.status_code != 200:
-        _fail_response(module, res, "Replacing preset %s" % name, write=True)
+        _fail_response(module, res, operation, write=True)
 
 
-def _rename_preset(module, array, fleet, name, new_name):
+def _rename_preset(module, array, fleet, name, new_name, replaced=False):
+    """Rename the preset, the last write of a run
+
+    replaced is whether the content was replaced first. A refused rename then
+    fails as a change, saying what was done and what was not.
+    """
     res = array.patch_presets_workload(
         names=[name],
         preset=PresetWorkloadPatch(name=new_name),
         context_names=[fleet],
     )
     if res.status_code != 200:
-        _fail_response(
-            module, res, "Renaming preset %s to %s" % (name, new_name), write=True
-        )
+        operation = "Renaming preset %s to %s" % (name, new_name)
+        if replaced:
+            operation = (
+                "The content of preset %s was replaced, but renaming it to %s"
+                % (name, new_name)
+            )
+        _fail_response(module, res, operation, write=True, changed=replaced)
 
 
 def _delete_preset(module, array, fleet, name):
@@ -1783,10 +1958,6 @@ def _delete_preset(module, array, fleet, name):
 
 def _check_rest_features(module, array):
     check_api_version(array, MIN_REQUIRED_API_VERSION, module, "Workload presets")
-    if module.params["skip_verify_deployable"]:
-        check_api_version(
-            array, SKIP_VERIFY_API_VERSION, module, "skip_verify_deployable"
-        )
     placement = module.params.get("placement") or {}
     if placement.get("targets"):
         check_api_version(array, TARGETS_API_VERSION, module, "Placement targets")
@@ -1796,7 +1967,11 @@ def _text(preset):
     return json.dumps(preset, indent=2, sort_keys=True) + "\n"
 
 
-def _diff_result(before, after, name, new_name):
+def _diff_result(before, after, name, new_name, renamed=False):
+    """The --diff output. A rename is shown by name, as nothing else need differ"""
+    if renamed:
+        before = dict(before, name=name)
+        after = dict(after, name=new_name)
     return {
         "before": _text(before),
         "after": _text(after),
@@ -1951,6 +2126,8 @@ def main():
         desired_body = build_body(module.params)
     elif module.params["new_name"]:
         module.fail_json(msg="new_name can only be used with state present")
+    _check_name(module, "name")
+    _check_name(module, "new_name")
 
     array = get_array(module)
     _check_rest_features(module, array)
@@ -1978,9 +2155,12 @@ def main():
                     "manages block presets only, and will not replace it."
                     % (name if existing is not None else new_name, reason)
                 )
+        # A naming template the task leaves out is the one the fleet has, so
+        # the body and the comparison carry it
+        desired_body = carry_over_naming(desired_body, base)
         after = normalise_preset(desired_body)
         if base is not None:
-            before = ignore_unrequested_naming(normalise_preset(base), after)
+            before = normalise_preset(base)
             differs = before != after
     elif existing is not None:
         reason = not_a_block_preset(existing)
@@ -2003,21 +2183,36 @@ def main():
         sections.insert(0, "name")
 
     if not module.check_mode:
-        if decision.rename:
-            _rename_preset(module, array, fleet, name, new_name)
         if decision.write == "create":
             _create_preset(module, array, fleet, decision.target, desired_body)
         elif decision.write == "replace":
-            _replace_preset(module, array, fleet, decision.target, desired_body)
+            # Under the name the preset has now. The rename comes last, so a
+            # refused replacement changes nothing
+            _replace_preset(
+                module,
+                array,
+                fleet,
+                name if decision.rename else decision.target,
+                desired_body,
+            )
         elif decision.delete:
             _delete_preset(module, array, fleet, decision.target)
+        if decision.rename:
+            _rename_preset(
+                module,
+                array,
+                fleet,
+                name,
+                new_name,
+                replaced=decision.write == "replace",
+            )
 
     # The revision is read after a write because a response to a write is
     # shaped differently from a read
     revision = None
     if state == "present":
         if changed and not module.check_mode:
-            current = _read_preset(module, array, fleet, decision.target)
+            current = _read_preset(module, array, fleet, decision.target, changed=True)
             revision = (current or {}).get("revision")
         elif base is not None:
             revision = base.get("revision")
@@ -2031,7 +2226,9 @@ def main():
         ),
     )
     if module._diff:
-        result["diff"] = _diff_result(before, after, name, decision.target)
+        result["diff"] = _diff_result(
+            before, after, name, decision.target, decision.rename
+        )
     module.exit_json(**result)
 
 

@@ -1,0 +1,281 @@
+{
+  "id": "4575ab53-93dc-4c99-ac70-ffe48db55355",
+  "name": "test1",
+  "context": {
+    "id": "81fc3f3b-76aa-4cad-ab38-7dcf9c806e6c",
+    "name": "ansibledev",
+    "resource_type": "fleets"
+  },
+  "description": "test1 description",
+  "directory_configurations": [],
+  "parameters": [
+    {
+      "constraints": {
+        "integer": {
+          "allowed_values": [
+            1073741824,
+            2147483648
+          ],
+          "default": 1073741824,
+          "maximum": 3221225472,
+          "minimum": 1073741824
+        }
+      },
+      "metadata": {
+        "description": "",
+        "display_name": "",
+        "subtype": "size"
+      },
+      "name": "volsize",
+      "type": "integer"
+    },
+    {
+      "constraints": {
+        "string": {
+          "allowed_values": [
+            "stringpardef",
+            "anyother"
+          ],
+          "default": "stringpardef"
+        }
+      },
+      "metadata": {
+        "description": "stringpar",
+        "display_name": ""
+      },
+      "name": "stringpar",
+      "type": "string"
+    },
+    {
+      "constraints": {
+        "boolean": {
+          "default": true
+        }
+      },
+      "metadata": {
+        "description": "boolpar decp",
+        "display_name": ""
+      },
+      "name": "boolpar",
+      "type": "boolean"
+    },
+    {
+      "constraints": {
+        "resource_reference": {
+          "allowed_values": [
+            {
+              "resource_type": "remote-arrays"
+            }
+          ],
+          "default": {
+            "name": "sn1-x50r2-f07-30",
+            "resource_type": "remote-arrays"
+          }
+        }
+      },
+      "metadata": {
+        "description": "par resource",
+        "display_name": ""
+      },
+      "name": "resourcepar",
+      "type": "resource_reference"
+    },
+    {
+      "constraints": {
+        "resource_reference": {
+          "allowed_values": [
+            {
+              "resource_type": "storage-classes"
+            }
+          ],
+          "default": {
+            "name": "flasharray-c",
+            "resource_type": "storage-classes"
+          }
+        }
+      },
+      "metadata": {
+        "description": "ref resource oar",
+        "display_name": ""
+      },
+      "name": "resourcerefpar",
+      "type": "resource_reference"
+    }
+  ],
+  "periodic_replication_configurations": [
+    {
+      "name": "testrepl",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}"
+        }
+      ],
+      "remote_targets": [
+        {
+          "id": "",
+          "name": "sn1-x50r2-f07-30",
+          "resource_type": "remote-arrays"
+        }
+      ],
+      "rules": [
+        {
+          "client_name": [],
+          "every": "900000",
+          "keep_for": "86400000",
+          "suffix": "",
+          "time_zone": ""
+        }
+      ]
+    },
+    {
+      "name": "par1",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}"
+        }
+      ],
+      "remote_targets": [
+        {
+          "id": "{{ parameters.resourcepar.id }}",
+          "name": "{{ parameters.resourcepar.name }}",
+          "resource_type": "{{ parameters.resourcepar.resource_type }}"
+        }
+      ],
+      "rules": [
+        {
+          "client_name": [],
+          "every": "3600000",
+          "keep_for": "7200000",
+          "suffix": "",
+          "time_zone": ""
+        }
+      ]
+    }
+  ],
+  "placement_configurations": [
+    {
+      "name": "default-placement",
+      "qos_configurations": [
+        "default-qos"
+      ],
+      "storage_class": {
+        "id": "{{ parameters.resourcerefpar.id }}",
+        "name": "{{ parameters.resourcerefpar.name }}",
+        "resource_type": "{{ parameters.resourcerefpar.resource_type }}"
+      }
+    }
+  ],
+  "platform_features": [
+    "fa_block"
+  ],
+  "qos_configurations": [
+    {
+      "bandwidth_limit": "2621440000",
+      "iops_limit": "1000000",
+      "name": "default-qos",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}"
+        }
+      ]
+    }
+  ],
+  "quota_configurations": [],
+  "revision": 8,
+  "snapshot_configurations": [
+    {
+      "name": "testsnap",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}"
+        }
+      ],
+      "rules": [
+        {
+          "at": "39600000",
+          "client_name": [],
+          "every": "86400000",
+          "keep_for": "172800000",
+          "suffix": "",
+          "time_zone": ""
+        }
+      ]
+    }
+  ],
+  "volume_configurations": [
+    {
+      "count": "2",
+      "name": "test",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}-{{functions.pad_left(workload.configuration.index, 4)}}"
+        }
+      ],
+      "periodic_replication_configurations": [
+        "par1"
+      ],
+      "placement_configurations": [
+        "default-placement"
+      ],
+      "provisioned_size": "1073741824",
+      "snapshot_configurations": []
+    },
+    {
+      "count": "2",
+      "name": "test1",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}-{{functions.pad_left(workload.configuration.index, 4)}}"
+        }
+      ],
+      "periodic_replication_configurations": [
+        "testrepl"
+      ],
+      "placement_configurations": [
+        "default-placement"
+      ],
+      "provisioned_size": "2147483648",
+      "snapshot_configurations": []
+    },
+    {
+      "count": "1",
+      "name": "testvol",
+      "naming_patterns": [
+        {
+          "template": "{{functions.left(workload.name, 25)}}-{{functions.left(workload.configuration.name, 25)}}-{{functions.pad_left(workload.configuration.index, 4)}}"
+        }
+      ],
+      "periodic_replication_configurations": [
+        "testrepl"
+      ],
+      "placement_configurations": [
+        "default-placement"
+      ],
+      "provisioned_size": "{{ parameters.volsize }}",
+      "snapshot_configurations": [
+        "testsnap"
+      ]
+    }
+  ],
+  "workload_tags": [
+    {
+      "copyable": "true",
+      "key": "tag1",
+      "namespace": "default",
+      "value": "{{ parameters.volsize }}"
+    },
+    {
+      "copyable": "true",
+      "key": "athing",
+      "namespace": "default",
+      "value": "{{ parameters.stringpar }}"
+    },
+    {
+      "copyable": "true",
+      "key": "boolkey",
+      "namespace": "default",
+      "value": "{{ parameters.boolpar }}"
+    }
+  ],
+  "workload_type": "SAP"
+}

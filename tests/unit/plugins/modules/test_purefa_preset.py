@@ -9,6 +9,8 @@ __metaclass__ = type
 
 import copy
 import json
+import pathlib
+import re
 import sys
 from contextlib import ExitStack
 from unittest.mock import Mock, MagicMock, patch
@@ -45,15 +47,16 @@ from plugins.modules.purefa_preset import (
     _error_text,
     _is_absent,
     build_body,
+    carry_over_naming,
     changed_sections,
     decide,
-    ignore_unrequested_naming,
     normalise_preset,
     not_a_block_preset,
     validate_preset,
 )
 
 FLEET = "ansibledev"
+FIXTURES = pathlib.Path(__file__).resolve().with_name("fixtures")
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +273,11 @@ def _server_form(body, name="app", revision=1):
     """
     preset = copy.deepcopy(body)
     for section in CONFIG_SECTIONS:
+        # A placement names nothing, so the array gives it no template and
+        # its model has no field for one (Purity//FA 6.10.6, REST 2.54)
+        fills_template = section != "placement_configurations"
         for config in preset.get(section) or []:
-            if not config.get("naming_patterns"):
+            if fills_template and not config.get("naming_patterns"):
                 config["naming_patterns"] = [
                     {"template": "{{ workload.name }}-%s" % config["name"]}
                 ]
@@ -328,6 +334,8 @@ class _FakeFleet:
         self.calls.append(("get", kwargs))
         if "get" in self.fail:
             return self.fail["get"]
+        if "get_after_write" in self.fail and self.writes():
+            return self.fail["get_after_write"]
         name = kwargs["names"][0]
         if name not in self.store:
             return _error_response(400, "Preset does not exist.")
@@ -404,13 +412,20 @@ class _Run:
 
 
 def _run_main(
-    params, array=None, check_mode=False, diff=False, sdk=True, api_check=None
+    params,
+    array=None,
+    check_mode=False,
+    diff=False,
+    sdk=True,
+    api_check=None,
+    reject=None,
 ):
     """Run main() against a fake fleet, returning what it did
 
     The SDK models are replaced by builders that keep their arguments, so a test
-    reads what was sent, not that something was. The module's own parameter handling
-    is replaced too, since AnsibleModule is a mock here.
+    reads what was sent, not that something was. reject maps a model name to the
+    exception the real model would raise for the body. The module's own parameter
+    handling is replaced too, since AnsibleModule is a mock here.
     """
     array = _FakeFleet() if array is None else array
     module = Mock()
@@ -436,6 +451,8 @@ def _run_main(
         name: Mock(side_effect=lambda _n=name, **kw: _Model(_n, **kw))
         for name in ("PresetWorkload", "PresetWorkloadPatch", "PresetWorkloadPost")
     }
+    for name, error in (reject or {}).items():
+        run.models[name] = Mock(side_effect=error)
     with ExitStack() as patches:
         for target, replacement in (
             ("HAS_PURESTORAGE", sdk),
@@ -498,6 +515,13 @@ def _many(*changes):
     return apply
 
 
+def _drop_param(name):
+    def apply(params):
+        params["parameters"] = [p for p in params["parameters"] if p["name"] != name]
+
+    return apply
+
+
 VALIDATION_CASES = [
     ("no-workload-type", _set("workload_type", None), "workload_type is required"),
     (
@@ -521,6 +545,25 @@ VALIDATION_CASES = [
         "two-qos",
         _set("qos", [_qos("q1"), _qos("q2")]),
         "qos has 2 entries, at most 1 is allowed",
+    ),
+    (
+        "three-snapshots",
+        _many(
+            _set("snapshots", [_snapshot("s1"), _snapshot("s2"), _snapshot("s3")]),
+            _set("volumes.0.snapshots", ["s1", "s2", "s3"]),
+        ),
+        "snapshots has 3 entries, at most 2 are allowed",
+    ),
+    (
+        "three-replications",
+        _many(
+            _set(
+                "replications",
+                [_replication("r1"), _replication("r2"), _replication("r3")],
+            ),
+            _set("volumes.0.replications", ["r1", "r2", "r3"]),
+        ),
+        "replications has 3 entries, at most 2 are allowed",
     ),
     (
         "volume-named-like-placement",
@@ -559,6 +602,22 @@ VALIDATION_CASES = [
         "placement storage_class needs exactly one of name and parameter",
     ),
     (
+        "storage-class-name-is-a-template",
+        _set(
+            "placement.storage_class",
+            {"name": "{{ parameters.env }}", "parameter": None},
+        ),
+        "placement storage_class name '{{ parameters.env }}' is a parameter "
+        "reference. Give the parameter's name with parameter instead of name",
+    ),
+    (
+        "target-name-is-a-template",
+        _set(
+            "placement.targets", [{"name": "{{ parameters.env }}", "parameter": None}]
+        ),
+        "placement target name '{{ parameters.env }}' is a parameter reference",
+    ),
+    (
         "two-targets",
         _set("placement.targets", [_reference("a"), _reference("b")]),
         "placement targets has 2 entries, at most 1 is allowed",
@@ -566,6 +625,11 @@ VALIDATION_CASES = [
     (
         "target-neither",
         _set("placement.targets", [{"name": None, "parameter": None}]),
+        "placement target needs exactly one of name and parameter",
+    ),
+    (
+        "target-both",
+        _set("placement.targets", [{"name": "arrayB", "parameter": "env"}]),
         "placement target needs exactly one of name and parameter",
     ),
     (
@@ -582,6 +646,16 @@ VALIDATION_CASES = [
         "volume-replication-undefined",
         _set("volumes.0.replications", ["nope"]),
         "refers to replication configuration 'nope'",
+    ),
+    (
+        "volume-snapshot-listed-twice",
+        _set("volumes.0.snapshots", ["hourly", "hourly"]),
+        "volume 'data' lists snapshot configuration 'hourly' more than once",
+    ),
+    (
+        "volume-replication-listed-twice",
+        _set("volumes.0.replications", ["offsite", "offsite"]),
+        "volume 'data' lists replication configuration 'offsite' more than once",
     ),
     (
         "count-not-a-number",
@@ -630,9 +704,9 @@ VALIDATION_CASES = [
         "iops_limit must be at most 100000000",
     ),
     (
-        "bandwidth-zero",
-        _set("qos.0.bandwidth_limit", "0"),
-        "bandwidth_limit must be at least 1",
+        "bandwidth-too-low",
+        _set("qos.0.bandwidth_limit", "1048575"),
+        "bandwidth_limit must be at least 1048576",
     ),
     (
         "bandwidth-too-high",
@@ -731,6 +805,20 @@ VALIDATION_CASES = [
         "replication 'offsite' target needs exactly one of name and parameter",
     ),
     (
+        "replication-target-both",
+        _set("replications.0.target", {"name": "arrayB", "parameter": "env"}),
+        "replication 'offsite' target needs exactly one of name and parameter",
+    ),
+    (
+        "replication-target-name-is-a-template",
+        _set(
+            "replications.0.target",
+            {"name": "{{ parameters.env }}", "parameter": None},
+        ),
+        "replication 'offsite' target name '{{ parameters.env }}' is a parameter "
+        "reference",
+    ),
+    (
         "replication-no-rules",
         _set("replications.0.rules", []),
         "replication 'offsite' needs at least one rule",
@@ -773,6 +861,31 @@ VALIDATION_CASES = [
         "string-with-resource-type",
         _set("parameters.0.resource_type", "storage-classes"),
         "option resource_type is not valid for type string",
+    ),
+    (
+        "string-with-subtype",
+        _set("parameters.0.subtype", "size"),
+        "option subtype is not valid for type string",
+    ),
+    (
+        "boolean-with-subtype",
+        _set("parameters", [_param("env", "boolean", subtype="size")]),
+        "option subtype is not valid for type boolean",
+    ),
+    (
+        "reference-with-subtype",
+        _set(
+            "parameters",
+            [
+                _param(
+                    "env",
+                    "resource_reference",
+                    resource_type="remote-arrays",
+                    subtype="size",
+                )
+            ],
+        ),
+        "option subtype is not valid for type resource_reference",
     ),
     (
         "integer-with-resource-type",
@@ -866,6 +979,11 @@ VALIDATION_CASES = [
         "display_name is longer than 64 characters",
     ),
     (
+        "long-parameter-description",
+        _set("parameters.0.description", "d" * 1025),
+        "parameter 'env' description is longer than 1024 characters",
+    ),
+    (
         "undefined-parameter-used",
         _set("volumes.0.provisioned_size", "{{ parameters.zzz }}"),
         "parameter 'zzz' is used but not defined in parameters",
@@ -908,6 +1026,19 @@ VALIDATION_CASES = [
         "replication-target-from-undefined-parameter",
         _set("replications.0.target", {"name": None, "parameter": "gone"}),
         "parameter 'gone' is used but not defined in parameters",
+    ),
+    (
+        "replication-target-from-wrong-resource-type",
+        _many(
+            _set(
+                "parameters",
+                [_param("env", "resource_reference", resource_type="storage-classes")],
+            ),
+            _set("replications.0.target", {"name": None, "parameter": "env"}),
+            _set("tags.1.value", "fixed"),
+        ),
+        "replication 'offsite' target needs a parameter with resource_type "
+        "remote-arrays, but 'env' has storage-classes",
     ),
 ]
 
@@ -979,14 +1110,65 @@ class TestValidatePreset:
         errors = validate_preset(params)
         assert any("used by a placement and a volume" in e for e in errors)
 
-    def test_server_limits_are_those_measured_not_the_sdk_docs(self):
-        # The SDK documents 5 QoS configurations. The array takes one.
-        assert preset_module.MAX_QOS == 1
-        assert preset_module.MAX_VOLUMES == 5
-        assert preset_module.MAX_RULES == 2
-
     def test_five_volumes_are_accepted(self):
         params = _minimal_params(volumes=[_volume("v%d" % i) for i in range(5)])
+        assert validate_preset(params) == []
+
+    def test_a_volume_without_a_count_counts_as_one(self):
+        # The argument spec defaults count to 1; an explicit null gets there too
+        assert validate_preset(_minimal_params(volumes=[_volume(count=None)])) == []
+        params = _minimal_params(
+            volumes=[_volume("a", count=None), _volume("b", count="500")]
+        )
+        errors = validate_preset(params)
+        assert any("add up to 501, at most 500" in e for e in errors), errors
+
+    def test_bandwidth_bounds_are_inclusive(self):
+        for limit in ("1048576", "549755813888"):
+            params = _params(qos=[_qos(bandwidth_limit=limit)])
+            assert validate_preset(params) == [], limit
+
+    @pytest.mark.parametrize("subtype", preset_module.SUBTYPES)
+    def test_an_integer_parameter_may_have_any_accepted_subtype(self, subtype):
+        # The five values Purity//FA 6.10.6 accepted when each was tried
+        params = _params()
+        params["parameters"] = [_param("size", "integer", subtype=subtype)]
+        params["volumes"][0]["provisioned_size"] = "{{ parameters.size }}"
+        params["tags"] = None
+        assert validate_preset(params) == []
+
+    @pytest.mark.parametrize("ptype", ["string", "boolean", "resource_reference"])
+    @pytest.mark.parametrize("subtype", preset_module.SUBTYPES)
+    def test_a_subtype_on_any_other_type_is_refused(self, ptype, subtype):
+        # The array answers 400 "Invalid combination of parameters specified."
+        params = _params()
+        extra = (
+            {"resource_type": "storage-classes"}
+            if ptype == "resource_reference"
+            else {}
+        )
+        params["parameters"] = [_param("env", ptype, subtype=subtype, **extra)]
+        if ptype == "resource_reference":
+            params["placement"]["storage_class"] = {"name": None, "parameter": "env"}
+            params["tags"] = None
+        errors = validate_preset(params)
+        assert "parameter 'env' option subtype is not valid for type %s" % ptype in (
+            errors
+        )
+
+    def test_two_snapshot_and_two_replication_configurations_are_accepted(self):
+        params = _params(
+            snapshots=[_snapshot("s1"), _snapshot("s2")],
+            replications=[_replication("r1"), _replication("r2")],
+            volumes=[
+                _volume(
+                    count="2",
+                    provisioned_size="107374182400",
+                    snapshots=["s1", "s2"],
+                    replications=["r1", "r2"],
+                )
+            ],
+        )
         assert validate_preset(params) == []
 
 
@@ -1103,6 +1285,10 @@ class TestBuildBody:
         body = build_body(params)
         assert body["volume_configurations"][0]["count"] == "3"
         assert body["volume_configurations"][0]["provisioned_size"] == "1073741824"
+
+    def test_a_volume_without_a_count_is_sent_as_one(self):
+        body = build_body(_minimal_params(volumes=[_volume(count=None)]))
+        assert body["volume_configurations"][0]["count"] == "1"
 
     def test_parameter_templates_pass_through_unchanged(self):
         params = _params()
@@ -1299,8 +1485,9 @@ class TestBuildBody:
         build_body(params)
         assert params == before
 
-    def test_body_builds_both_models(self):
-        # The SDK models take the nested dicts as they are
+    def test_body_is_json_serialisable(self):
+        # Plain dicts, lists and scalars only; what the real SDK models make of
+        # the body is checked in test_purefa_preset_sdk.py
         body = build_body(_params())
         assert json.loads(json.dumps(body)) == body
 
@@ -1336,6 +1523,47 @@ class TestNormalise:
         bare = {"workload_type": "Custom"}
         assert normalise_preset(with_null) == normalise_preset(with_empty)
         assert normalise_preset(with_null) == normalise_preset(bare) == bare
+
+    def test_empty_dicts_are_alike_with_missing_ones(self):
+        # The SDK's to_dict() leaves out null fields, so a parameter written
+        # without constraints reads back with constraints {} or {"integer": {}}
+        with_empty = {
+            "workload_tags": {},
+            "parameters": [
+                {"name": "n", "type": "integer", "constraints": {}, "metadata": {}}
+            ],
+        }
+        with_empty_block = {
+            "parameters": [
+                {"name": "n", "type": "integer", "constraints": {"integer": {}}}
+            ]
+        }
+        bare = {"parameters": [{"name": "n", "type": "integer"}]}
+        assert normalise_preset(with_empty) == normalise_preset(bare) == bare
+        assert normalise_preset(with_empty_block) == bare
+
+    def test_shapes_the_module_never_writes_are_tolerated(self):
+        # A placement without a storage class, a replication without targets and
+        # a resource reference without a resource type cannot be written through
+        # the module, but a read-back shaped that way must not raise
+        preset = {
+            "placement_configurations": [{"name": "p", "qos_configurations": []}],
+            "periodic_replication_configurations": [{"name": "r", "rules": []}],
+            "parameters": [
+                {
+                    "name": "t",
+                    "type": "resource_reference",
+                    "constraints": {
+                        "resource_reference": {"allowed_values": [{}], "default": {}}
+                    },
+                }
+            ],
+        }
+        assert normalise_preset(preset) == {
+            "placement_configurations": [{"name": "p"}],
+            "periodic_replication_configurations": [{"name": "r"}],
+            "parameters": [{"name": "t", "type": "resource_reference"}],
+        }
 
     def test_empty_text_is_missing(self):
         preset = {
@@ -1500,7 +1728,9 @@ class TestNormalise:
             "remote_targets"
         ] == [{"parameter": "peer"}]
 
-    def test_resource_reference_constraint_is_reduced_to_type_and_default(self):
+    def test_resource_reference_constraint_keeps_allowed_values_and_default_name(
+        self,
+    ):
         preset = {
             "parameters": [
                 {
@@ -1524,10 +1754,69 @@ class TestNormalise:
         constraints = normalise_preset(preset)["parameters"][0]["constraints"]
         assert constraints == {
             "resource_reference": {
-                "resource_type": "storage-classes",
+                "allowed_values": [{"resource_type": "storage-classes"}],
                 "default": "flasharray-x",
             }
         }
+        # What the module writes reads back as the same thing
+        params = _params()
+        params["parameters"] = [
+            _param(
+                "tier",
+                "resource_reference",
+                resource_type="storage-classes",
+                default="flasharray-x",
+            )
+        ]
+        params["placement"]["storage_class"] = {"name": None, "parameter": "tier"}
+        params["tags"] = None
+        written = normalise_preset(build_body(params))["parameters"][0]
+        assert written["constraints"] == constraints
+
+    def test_a_restricted_resource_reference_is_not_the_unrestricted_one(self):
+        # Purity//FA 6.10.6 refuses a named allowed value ("Must not be set."),
+        # so the module only ever writes the single resource_type entry. A fleet
+        # that holds named entries, from a newer array or another tool, has a
+        # different parameter, and the comparison has to say so. Order and ids
+        # are not part of the difference
+        def constraint(*allowed):
+            return {
+                "parameters": [
+                    {
+                        "name": "tier",
+                        "type": "resource_reference",
+                        "constraints": {
+                            "resource_reference": {"allowed_values": list(allowed)}
+                        },
+                    }
+                ]
+            }
+
+        unrestricted = normalise_preset(
+            constraint({"resource_type": "storage-classes"})
+        )
+        restricted = normalise_preset(
+            constraint(
+                {"resource_type": "storage-classes", "name": "flasharray-x", "id": "1"},
+                {"resource_type": "storage-classes", "name": "flasharray-c", "id": "2"},
+            )
+        )
+        assert restricted != unrestricted
+        assert restricted["parameters"][0]["constraints"] == {
+            "resource_reference": {
+                "allowed_values": [
+                    {"resource_type": "storage-classes", "name": "flasharray-c"},
+                    {"resource_type": "storage-classes", "name": "flasharray-x"},
+                ]
+            }
+        }
+        reordered = normalise_preset(
+            constraint(
+                {"resource_type": "storage-classes", "name": "flasharray-c"},
+                {"resource_type": "storage-classes", "name": "flasharray-x", "id": "9"},
+            )
+        )
+        assert reordered == restricted
 
     def test_lists_without_order_are_sorted(self):
         preset = {
@@ -1594,11 +1883,9 @@ class TestNormalise:
     def test_read_back_of_a_written_preset_equals_the_written_one(self):
         for params in (_params(), _minimal_params()):
             body = build_body(params)
-            desired = normalise_preset(body)
-            actual = ignore_unrequested_naming(
-                normalise_preset(_server_form(body)), desired
-            )
-            assert actual == desired
+            stored = _server_form(body)
+            desired = normalise_preset(carry_over_naming(body, stored))
+            assert normalise_preset(stored) == desired
 
     def test_numbers_read_back_as_integers_are_not_a_change(self):
         body = build_body(_params())
@@ -1611,61 +1898,245 @@ class TestNormalise:
         for config in read_back["snapshot_configurations"]:
             for rule in config["rules"]:
                 rule["every"] = int(rule["every"])
-        desired = normalise_preset(body)
-        actual = ignore_unrequested_naming(normalise_preset(read_back), desired)
-        assert actual == desired
+        desired = normalise_preset(carry_over_naming(body, read_back))
+        assert normalise_preset(read_back) == desired
 
 
-class TestIgnoreUnrequestedNaming:
-    def test_default_naming_is_dropped_where_the_task_chose_none(self):
-        actual = {
+CUSTOM_TEMPLATE = (
+    "{{workload.name}}-mine-{{functions.pad_left(workload.configuration.index, 3)}}"
+)
+
+
+class TestCarryOverNaming:
+    """A naming template the task leaves out is the one the fleet has
+
+    A PUT without naming_patterns resets the template to the array's default
+    (seen on Purity//FA 6.10.6: omitted, [] and null all reset it), so the body
+    borrows the stored template, and the comparison then sees it on both sides.
+    """
+
+    def test_omitted_template_is_taken_from_the_stored_configuration(self):
+        body = {"volume_configurations": [{"name": "v", "count": "1"}]}
+        stored = {
             "volume_configurations": [
-                {"name": "v", "naming_patterns": [{"template": "default"}]}
+                {"name": "v", "naming_patterns": [{"template": CUSTOM_TEMPLATE}]}
             ]
         }
-        desired = {"volume_configurations": [{"name": "v"}]}
-        assert ignore_unrequested_naming(actual, desired) == {
-            "volume_configurations": [{"name": "v"}]
-        }
+        carried = carry_over_naming(body, stored)
+        assert carried["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+        # Only the template is borrowed, nothing else the array may add
+        stored["volume_configurations"][0]["naming_patterns"][0]["id"] = "x"
+        carried = carry_over_naming(body, stored)
+        assert carried["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
 
-    def test_naming_is_kept_where_the_task_chose_one(self):
-        actual = {
-            "volume_configurations": [
-                {"name": "v", "naming_patterns": [{"template": "default"}]}
-            ]
-        }
-        desired = {
+    def test_an_explicit_template_is_not_replaced(self):
+        body = {
             "volume_configurations": [
                 {"name": "v", "naming_patterns": [{"template": "mine"}]}
             ]
         }
-        assert ignore_unrequested_naming(actual, desired) == actual
-
-    def test_a_changed_chosen_template_is_a_difference(self):
-        body = build_body(_minimal_params())
-        body["volume_configurations"][0]["naming_patterns"] = [{"template": "mine"}]
-        desired = normalise_preset(body)
-        stored = _server_form(build_body(_minimal_params()))
-        stored["volume_configurations"][0]["naming_patterns"] = [{"template": "old"}]
-        actual = ignore_unrequested_naming(normalise_preset(stored), desired)
-        assert actual != desired
-
-    def test_configuration_not_in_the_task_is_left_alone(self):
-        actual = {
-            "qos_configurations": [
-                {"name": "extra", "naming_patterns": [{"template": "t"}]}
+        stored = {
+            "volume_configurations": [
+                {"name": "v", "naming_patterns": [{"template": "theirs"}]}
             ]
         }
-        assert ignore_unrequested_naming(copy.deepcopy(actual), {}) == actual
+        assert carry_over_naming(body, stored) == body
+
+    def test_a_configuration_the_fleet_does_not_have_gets_nothing(self):
+        body = {"volume_configurations": [{"name": "new"}]}
+        stored = {
+            "volume_configurations": [
+                {"name": "old", "naming_patterns": [{"template": "t"}]}
+            ]
+        }
+        assert carry_over_naming(body, stored) == body
+        assert carry_over_naming(body, None) == body
+        assert carry_over_naming(body, {}) == body
+
+    def test_the_kind_has_to_match_as_well_as_the_name(self):
+        # A stored qos named x lends nothing to a volume named x
+        body = {"volume_configurations": [{"name": "x"}]}
+        stored = {
+            "qos_configurations": [
+                {"name": "x", "naming_patterns": [{"template": "t"}]}
+            ]
+        }
+        assert carry_over_naming(body, stored) == body
+
+    def test_empty_or_odd_stored_patterns_lend_nothing(self):
+        body = {"qos_configurations": [{"name": "q"}]}
+        for patterns in (None, [], [{}], [{"template": ""}], ["text"]):
+            stored = {
+                "qos_configurations": [{"name": "q", "naming_patterns": patterns}]
+            }
+            assert carry_over_naming(body, stored) == body, patterns
 
     def test_covers_every_configuration_kind(self):
-        actual = {
-            section: [{"name": "x", "naming_patterns": [{"template": "t"}]}]
+        body = {section: [{"name": "x"}] for section in CONFIG_SECTIONS}
+        stored = {
+            section: [{"name": "x", "naming_patterns": [{"template": section}]}]
             for section in CONFIG_SECTIONS
         }
-        desired = {section: [{"name": "x"}] for section in CONFIG_SECTIONS}
-        cleaned = ignore_unrequested_naming(actual, desired)
-        assert all("naming_patterns" not in cleaned[s][0] for s in CONFIG_SECTIONS)
+        carried = carry_over_naming(body, stored)
+        for section in CONFIG_SECTIONS:
+            assert carried[section][0]["naming_patterns"] == [{"template": section}]
+
+    def test_does_not_change_its_inputs(self):
+        body = {"volume_configurations": [{"name": "v"}]}
+        stored = {
+            "volume_configurations": [
+                {"name": "v", "naming_patterns": [{"template": "t"}]}
+            ]
+        }
+        body_before, stored_before = copy.deepcopy(body), copy.deepcopy(stored)
+        carry_over_naming(body, stored)
+        assert body == body_before and stored == stored_before
+
+    def test_omitted_with_a_stored_custom_template_is_no_change(self):
+        # Run 1 set a template, run 2 leaves it out: nothing to do
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        array = _FakeFleet({"app": _stored(with_template)})
+        run = _run_main(_params(), array)
+        assert run.kind == "exit"
+        assert run.result["changed"] is False
+        assert array.writes() == []
+
+    def test_omitted_with_the_stored_default_is_no_change(self):
+        # _server_form fills the fake array's default template everywhere
+        # but the placement, which has none on the array either
+        params = _params()
+        stored = _stored(params)
+        assert all(
+            config["naming_patterns"]
+            for section in CONFIG_SECTIONS
+            if section != "placement_configurations"
+            for config in stored.get(section) or []
+        )
+        assert "naming_patterns" not in stored["placement_configurations"][0]
+        run = _run_main(params, _FakeFleet({"app": stored}))
+        assert run.result["changed"] is False
+
+    def test_a_change_elsewhere_carries_the_stored_template_into_the_put(self):
+        # The point of the carry-over: a PUT for another reason no longer
+        # resets the template
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        with_template["qos"][0]["naming_template"] = "{{workload.name}}-q"
+        array = _FakeFleet({"app": _stored(with_template)})
+        run = _run_main(_params(description="Changed"), array)
+        assert run.result["changed"] is True
+        assert run.result["preset"]["changed_sections"] == ["description"]
+        assert array.kinds() == ["get", "put", "get"]
+        body = run.models["PresetWorkload"].call_args.kwargs
+        assert body["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+        assert body["qos_configurations"][0]["naming_patterns"] == [
+            {"template": "{{workload.name}}-q"}
+        ]
+        # The snapshot and replication configurations lend the fake default
+        for section in (
+            "snapshot_configurations",
+            "periodic_replication_configurations",
+        ):
+            assert body[section][0]["naming_patterns"] == [
+                {"template": "{{ workload.name }}-%s" % body[section][0]["name"]}
+            ]
+        assert array.store["app"]["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+        again = _run_main(_params(description="Changed"), array)
+        assert again.result["changed"] is False
+
+    def test_an_explicit_different_template_is_a_change(self):
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        array = _FakeFleet({"app": _stored(with_template)})
+        changed = _params()
+        changed["volumes"][0]["naming_template"] = "{{workload.name}}-other"
+        run = _run_main(changed, array)
+        assert run.result["changed"] is True
+        assert run.result["preset"]["changed_sections"] == ["volume_configurations"]
+        body = run.models["PresetWorkload"].call_args.kwargs
+        assert body["volume_configurations"][0]["naming_patterns"] == [
+            {"template": "{{workload.name}}-other"}
+        ]
+        again = _run_main(changed, array)
+        assert again.result["changed"] is False
+
+    def test_setting_the_default_pattern_explicitly_is_the_way_back(self):
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        array = _FakeFleet({"app": _stored(with_template)})
+        default = _params()
+        default["volumes"][0]["naming_template"] = "{{ workload.name }}-data"
+        run = _run_main(default, array)
+        assert run.result["changed"] is True
+        assert run.result["preset"]["changed_sections"] == ["volume_configurations"]
+        # Leaving it out afterwards keeps the default, and is no change
+        again = _run_main(_params(), array)
+        assert again.result["changed"] is False
+
+    def test_a_new_configuration_is_sent_without_a_template(self):
+        array = _FakeFleet({"app": _stored(_params())})
+        params = _params(
+            volumes=[
+                _volume(
+                    count="2",
+                    provisioned_size="107374182400",
+                    snapshots=["hourly"],
+                    replications=["offsite"],
+                ),
+                _volume("logs"),
+            ]
+        )
+        run = _run_main(params, array)
+        assert run.result["changed"] is True
+        volumes = run.models["PresetWorkload"].call_args.kwargs["volume_configurations"]
+        assert "naming_patterns" in volumes[0]
+        assert "naming_patterns" not in volumes[1]
+        again = _run_main(params, array)
+        assert again.result["changed"] is False
+
+    def test_a_create_sends_no_template_the_task_did_not_give(self):
+        array = _FakeFleet()
+        run = _run_main(_params(), array)
+        body = run.models["PresetWorkloadPost"].call_args.kwargs
+        for section in CONFIG_SECTIONS:
+            for config in body.get(section) or []:
+                assert "naming_patterns" not in config, section
+
+    def test_a_preset_renamed_by_an_earlier_run_lends_its_templates(self):
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        array = _FakeFleet({"renamed": _stored(with_template, name="renamed")})
+        run = _run_main(_params(new_name="renamed", description="Changed"), array)
+        assert run.result["changed"] is True
+        body = run.models["PresetWorkload"].call_args.kwargs
+        assert body["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+
+    def test_the_diff_shows_the_carried_template_on_both_sides(self):
+        with_template = _params()
+        with_template["volumes"][0]["naming_template"] = CUSTOM_TEMPLATE
+        array = _FakeFleet({"app": _stored(with_template)})
+        run = _run_main(_params(description="Changed"), array, diff=True)
+        before = json.loads(run.result["diff"]["before"])
+        after = json.loads(run.result["diff"]["after"])
+        assert before["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+        assert after["volume_configurations"][0]["naming_patterns"] == [
+            {"template": CUSTOM_TEMPLATE}
+        ]
+        assert before["description"] == "A test preset"
+        assert after["description"] == "Changed"
 
 
 class TestSmallHelpers:
@@ -1848,7 +2319,14 @@ class TestArgumentSpec:
     def test_inputs_that_make_the_array_fail_are_closed_by_choices(self):
         spec = _spec_of()
         parameter = spec["parameters"]["options"]
-        assert parameter["subtype"]["choices"] == ["size"]
+        # The five values Purity//FA 6.10.6 accepted; "claude-bogus" was a 500
+        assert parameter["subtype"]["choices"] == [
+            "size",
+            "iops",
+            "bandwidth",
+            "time",
+            "duration",
+        ]
         assert parameter["resource_type"]["choices"] == [
             "storage-classes",
             "remote-arrays",
@@ -2024,20 +2502,47 @@ class TestCreate:
         assert list(array.store) == ["app"]
 
     def test_other_prefix_is_not_removed_and_is_rejected(self):
-        run = _run_main(_params(name="other:app"), _FakeFleet())
+        # Whether a prefix is the fleet's name is only known once the fleet is
+        # read, so this one refusal comes after get_fleets and before any
+        # preset is read or written
+        array = _FakeFleet()
+        run = _run_main(_params(name="other:app"), array)
         assert run.kind == "fail"
-        assert "Invalid preset name 'other:app'" in run.result["msg"]
+        assert run.result["msg"].startswith("Invalid preset name 'other:app'.")
+        assert "'%s:'" % FLEET in run.result["msg"]
+        assert [c[0] for c in array.calls] == ["get_fleets"]
+
+    def test_other_prefix_on_new_name_is_rejected(self):
+        array = _FakeFleet({"app": _stored(_params())})
+        run = _run_main(_params(new_name="other:renamed"), array)
+        assert run.kind == "fail"
+        assert run.result["msg"].startswith("Invalid preset new_name 'other:renamed'.")
+        assert [c[0] for c in array.calls] == ["get_fleets"]
 
     @pytest.mark.parametrize(
         "name",
-        ["12345", "-app", "app-", "a" * 64, "has space", "under_score", "dot.name"],
+        [
+            "12345",
+            "-app",
+            "app-",
+            "a" * 64,
+            "has space",
+            "under_score",
+            "dot.name",
+            ":app",
+            "%s:" % FLEET,
+            "%s:12345" % FLEET,
+            "%s:a:b" % FLEET,
+        ],
     )
-    def test_invalid_names_are_refused_before_any_read_of_a_preset(self, name):
+    def test_invalid_names_are_refused_before_the_array_is_reached(self, name):
         array = _FakeFleet()
         run = _run_main(_params(name=name), array)
         assert run.kind == "fail"
-        assert "Invalid preset name" in run.result["msg"]
-        assert array.kinds() == []
+        assert run.result["msg"].startswith("Invalid preset name '%s'." % name)
+        run.get_array.assert_not_called()
+        run.api_check.assert_not_called()
+        assert array.calls == []
 
     @pytest.mark.parametrize("name", ["a", "App1", "a-b", "9a", "a" * 63, "1-1"])
     def test_valid_names_are_accepted(self, name):
@@ -2050,7 +2555,8 @@ class TestCreate:
         run = _run_main(_params(new_name="999"), array)
         assert run.kind == "fail"
         assert "Invalid preset new_name '999'" in run.result["msg"]
-        assert array.writes() == []
+        run.get_array.assert_not_called()
+        assert array.calls == []
 
     def test_array_outside_a_fleet_is_refused(self):
         array = _FakeFleet(fleets=False)
@@ -2107,6 +2613,57 @@ class TestCreate:
         assert "at least one entry in volumes" in run.result["msg"]
         run.get_array.assert_not_called()
 
+    @pytest.mark.parametrize("section", ["snapshots", "replications"])
+    def test_a_third_configuration_is_refused_before_the_array_is_reached(
+        self, section
+    ):
+        # The SDK models take two of each and raise for a third, so the validator
+        # has to say no first
+        make = _snapshot if section == "snapshots" else _replication
+        params = _params()
+        params[section] = [make("c1"), make("c2"), make("c3")]
+        params["volumes"][0][section] = ["c1", "c2", "c3"]
+        run = _run_main(params)
+        assert run.kind == "fail"
+        assert "%s has 3 entries, at most 2 are allowed" % section in (
+            run.result["msg"]
+        )
+        run.get_array.assert_not_called()
+        for model in run.models.values():
+            model.assert_not_called()
+
+    def test_a_body_the_sdk_model_refuses_fails_cleanly(self):
+        # Whatever the model's own checks reject surfaces as fail_json, never a
+        # traceback, and nothing is sent
+        array = _FakeFleet()
+        run = _run_main(
+            _params(),
+            array,
+            reject={
+                "PresetWorkloadPost": ValueError(
+                    "snapshot_configurations: ensure this value has at most 2 items"
+                )
+            },
+        )
+        assert run.kind == "fail"
+        assert run.result["msg"] == (
+            "Creating preset app failed. The py-pure-client model rejected the "
+            "preset: snapshot_configurations: ensure this value has at most 2 items"
+        )
+        assert run.result["changed"] is False
+        assert array.writes() == []
+        assert array.store == {}
+
+    def test_a_failed_read_after_the_write_reports_changed(self):
+        # The preset was created; only the revision read-back failed
+        array = _FakeFleet(fail={"get_after_write": _error_response(500, "Busy.")})
+        run = _run_main(_params(), array)
+        assert run.kind == "fail"
+        assert run.result["msg"] == "Reading preset app failed. Error: Busy."
+        assert run.result["changed"] is True
+        assert array.kinds() == ["get", "post", "get"]
+        assert list(array.store) == ["app"]
+
     def test_task_parameters_are_not_changed(self):
         params = _params()
         run = _run_main(params, _FakeFleet())
@@ -2148,17 +2705,68 @@ class TestReplace:
         assert run.result["preset"]["revision"] == 4
 
     def test_put_body_is_the_task_not_a_merge_with_the_read_back(self):
+        # The task, plus the naming templates the fleet holds for the
+        # configurations the task names and nothing else from the read-back
         old = _params()
         stored = _stored(old, revision=3)
         array = _FakeFleet({"app": stored})
         new = _params(description="Changed")
         run = _run_main(new, array)
         kwargs = run.models["PresetWorkload"].call_args.kwargs
-        assert kwargs == build_body(new)
+        assert kwargs == carry_over_naming(build_body(new), stored)
+        assert kwargs["description"] == "Changed"
         for owned in ("name", "id", "context", "revision", "platform_features"):
             assert owned not in kwargs
+        stripped = copy.deepcopy(kwargs)
+        for section in CONFIG_SECTIONS:
+            for config in stripped.get(section) or []:
+                config.pop("naming_patterns", None)
+        assert stripped == build_body(new)
         run.models["PresetWorkloadPost"].assert_not_called()
         run.models["PresetWorkloadPatch"].assert_not_called()
+
+    def test_skip_verify_deployable_is_passed_on_replace_only_when_asked(self):
+        stored = _stored(_params())
+        array = _FakeFleet({"app": stored})
+        params = _params(description="x", skip_verify_deployable=True)
+        run = _run_main(params, array)
+        assert run.result["changed"] is True
+        put = [c for c in array.calls if c[0] == "put"][0][1]
+        assert sorted(put) == [
+            "context_names",
+            "names",
+            "preset",
+            "skip_verify_deployable",
+        ]
+        assert put["skip_verify_deployable"] is True
+        assert put["names"] == ["app"]
+        assert put["context_names"] == [FLEET]
+        run.models["PresetWorkload"].assert_called_once_with(
+            **carry_over_naming(build_body(params), stored)
+        )
+        # The flag is not stored, so the second run finds nothing to do
+        again = _run_main(params, array)
+        assert again.result["changed"] is False
+        assert array.kinds().count("put") == 1
+        array = _FakeFleet({"app": _stored(_params())})
+        _run_main(_params(description="x"), array)
+        put = [c for c in array.calls if c[0] == "put"][0][1]
+        assert "skip_verify_deployable" not in put
+
+    def test_a_read_back_item_that_is_a_plain_dict_is_accepted(self):
+        class _DictFleet(_FakeFleet):
+            def get_presets_workload(self, **kwargs):
+                self.calls.append(("get", kwargs))
+                name = kwargs["names"][0]
+                if name not in self.store:
+                    return _error_response(400, "Preset does not exist.")
+                return _ok([copy.deepcopy(self.store[name])])
+
+        params = _params()
+        run = _run_main(params, _DictFleet({"app": _stored(params, revision=2)}))
+        assert run.kind == "exit"
+        assert run.result["changed"] is False
+        assert run.result["preset"]["revision"] == 2
 
     def test_leaving_a_section_out_removes_it(self):
         array = _FakeFleet({"app": _stored(_params(), revision=1)})
@@ -2219,11 +2827,20 @@ class TestReplace:
             "parameters": _params(parameters=[_param("env", "string", default="test")]),
         }
         for section, params in variants.items():
-            array = _FakeFleet({"app": _stored(base)})
+            stored = _stored(base)
+            array = _FakeFleet({"app": stored})
             run = _run_main(params, array)
             assert run.result["changed"] is True, section
             assert section in run.result["preset"]["changed_sections"], section
             assert array.kinds() == ["get", "put", "get"], section
+            # The whole task is what was PUT, with the fleet's naming templates
+            # carried over, and the PUT settles the matter
+            assert run.models["PresetWorkload"].call_args.kwargs == (
+                carry_over_naming(build_body(params), stored)
+            ), section
+            again = _run_main(params, array)
+            assert again.result["changed"] is False, section
+            assert array.kinds().count("put") == 1, section
 
     def test_changing_a_numeric_field_by_value_is_noticed(self):
         base = _params()
@@ -2346,16 +2963,40 @@ class TestRename:
         assert run.result["preset"]["name"] == "renamed"
         assert run.result["preset"]["changed_sections"] == ["name"]
 
-    def test_rename_and_change_content_renames_then_replaces_under_the_new_name(self):
-        array = _FakeFleet({"app": _stored(_params(), revision=2)})
-        run = _run_main(_params(new_name="renamed", description="Changed"), array)
+    def test_rename_and_change_content_replaces_under_the_old_name_then_renames(
+        self,
+    ):
+        # The PUT goes first, to the name the preset has, so that a refused PUT
+        # leaves the fleet untouched. The PATCH rename is the last write
+        params = _params(new_name="renamed", description="Changed")
+        stored = _stored(_params(), revision=2)
+        array = _FakeFleet({"app": stored})
+        run = _run_main(params, array)
+        assert run.kind == "exit"
         assert run.result["changed"] is True
-        assert array.kinds() == ["get", "get", "patch", "put", "get"]
+        assert array.kinds() == ["get", "get", "put", "patch", "get"]
         put = [c for c in array.calls if c[0] == "put"][0][1]
-        assert put["names"] == ["renamed"]
+        assert put["names"] == ["app"]
+        assert put["context_names"] == [FLEET]
+        expected_body = carry_over_naming(build_body(params), stored)
+        assert put["preset"].kwargs == expected_body
+        patch_call = [c for c in array.calls if c[0] == "patch"][0][1]
+        assert patch_call["names"] == ["app"]
+        assert patch_call["context_names"] == [FLEET]
+        assert patch_call["preset"].kwargs == {"name": "renamed"}
+        run.models["PresetWorkload"].assert_called_once_with(**expected_body)
+        run.models["PresetWorkloadPatch"].assert_called_once_with(name="renamed")
+        run.models["PresetWorkloadPost"].assert_not_called()
+        # The revision is read back under the new name
+        assert array.calls[-1][1]["names"] == ["renamed"]
+        assert run.result["preset"]["name"] == "renamed"
+        assert run.result["preset"]["revision"] == 3
         assert run.result["preset"]["changed_sections"] == ["name", "description"]
         assert list(array.store) == ["renamed"]
         assert array.store["renamed"]["description"] == "Changed"
+        again = _run_main(params, array)
+        assert again.result["changed"] is False
+        assert array.writes()[-1][0] == "patch"
 
     def test_rename_put_body_has_no_name(self):
         array = _FakeFleet({"app": _stored(_params())})
@@ -2433,6 +3074,97 @@ class TestRename:
         assert run.result["msg"] == (
             "Renaming preset app to renamed failed. Error: Name is already in use."
         )
+        # Nothing happened before the PATCH, so nothing changed
+        assert run.result["changed"] is False
+        assert list(array.store) == ["app"]
+
+    def test_a_refused_replace_before_the_rename_changes_nothing(self):
+        # The PUT is refused, so the PATCH is never sent. The preset keeps its
+        # name and its content, and the task says nothing changed
+        array = _FakeFleet(
+            {"app": _stored(_params())},
+            fail={"put": _error_response(400, "Bad.")},
+        )
+        run = _run_main(_params(new_name="renamed", description="x"), array)
+        assert run.kind == "fail"
+        assert run.result["msg"] == "Replacing preset app failed. Error: Bad."
+        assert run.result["changed"] is False
+        assert run.result["status_code"] == 400
+        assert array.kinds() == ["get", "get", "put"]
+        put = [c for c in array.calls if c[0] == "put"][0][1]
+        assert put["names"] == ["app"]
+        run.models["PresetWorkloadPatch"].assert_not_called()
+        assert list(array.store) == ["app"]
+        assert array.store["app"]["description"] == "A test preset"
+        # With the refusal gone, the next run does the whole job
+        again = _run_main(
+            _params(new_name="renamed", description="x"), _FakeFleet(array.store)
+        )
+        assert again.kind == "exit"
+        assert again.result["changed"] is True
+        assert again.result["preset"]["changed_sections"] == ["name", "description"]
+
+    def test_a_refused_rename_after_the_replace_is_a_change(self):
+        # The PUT went through; the PATCH was then refused. The task fails, says
+        # the fleet was changed, because it was, and says which step failed
+        array = _FakeFleet(
+            {"app": _stored(_params())},
+            fail={"patch": _error_response(400, "Name is already in use.")},
+        )
+        run = _run_main(_params(new_name="renamed", description="x"), array)
+        assert run.kind == "fail"
+        assert run.result["msg"] == (
+            "The content of preset app was replaced, but renaming it to renamed "
+            "failed. Error: Name is already in use."
+        )
+        assert run.result["changed"] is True
+        assert run.result["status_code"] == 400
+        assert array.kinds() == ["get", "get", "put", "patch"]
+        put = [c for c in array.calls if c[0] == "put"][0][1]
+        assert put["names"] == ["app"]
+        patch_call = [c for c in array.calls if c[0] == "patch"][0][1]
+        assert patch_call["names"] == ["app"]
+        assert patch_call["preset"].kwargs == {"name": "renamed"}
+        assert list(array.store) == ["app"]
+        assert array.store["app"]["description"] == "x"
+        # The next run finds the content in place and only renames
+        again = _run_main(
+            _params(new_name="renamed", description="x"), _FakeFleet(array.store)
+        )
+        assert again.kind == "exit"
+        assert again.result["changed"] is True
+        assert again.array.kinds() == ["get", "get", "patch", "get"]
+        assert again.result["preset"]["changed_sections"] == ["name"]
+
+    def test_a_refused_rename_with_403_after_the_replace_keeps_the_hint(self):
+        array = _FakeFleet(
+            {"app": _stored(_params())},
+            fail={"patch": _error_response(403, "Operation not permitted")},
+        )
+        run = _run_main(_params(new_name="renamed", description="x"), array)
+        assert run.kind == "fail"
+        assert run.result["msg"].startswith(
+            "The content of preset app was replaced, but renaming it to renamed "
+            "failed. Error: Operation not permitted. Writing a preset needs"
+        )
+        assert run.result["changed"] is True
+        assert run.result["status_code"] == 403
+
+    def test_a_body_the_model_refuses_changes_nothing_even_with_a_rename(self):
+        array = _FakeFleet({"app": _stored(_params())})
+        run = _run_main(
+            _params(new_name="renamed", description="x"),
+            array,
+            reject={"PresetWorkload": ValueError("no")},
+        )
+        assert run.kind == "fail"
+        assert run.result["msg"] == (
+            "Replacing preset app failed. The py-pure-client model rejected the "
+            "preset: no"
+        )
+        assert run.result["changed"] is False
+        assert array.kinds() == ["get", "get"]
+        assert list(array.store) == ["app"]
 
     def test_new_name_with_absent_is_refused_before_the_array_is_reached(self):
         run = _run_main(_params(state="absent", new_name="renamed"))
@@ -2620,9 +3352,12 @@ class TestDiff:
         after = json.loads(diff["after"])
         assert before["description"] == "A test preset"
         assert after["description"] == "Changed"
-        # The array's own naming defaults are not shown for what the task never named
-        for config in before["volume_configurations"]:
-            assert "naming_patterns" not in config
+        # The fleet's naming templates, which the task never named, are carried
+        # over and so shown the same on both sides
+        for before_config, after_config in zip(
+            before["volume_configurations"], after["volume_configurations"]
+        ):
+            assert before_config["naming_patterns"] == after_config["naming_patterns"]
 
     def test_diff_is_text_with_sorted_keys_and_trailing_newline(self):
         run = _run_main(_params(), _FakeFleet(), diff=True)
@@ -2638,11 +3373,32 @@ class TestDiff:
         assert json.loads(run.result["diff"]["after"]) == {}
         assert json.loads(run.result["diff"]["before"])["workload_type"] == "PostgreSQL"
 
-    def test_rename_diff_headers(self):
+    def test_rename_diff_shows_the_name(self):
+        # Ansible prints nothing for a diff whose texts are equal, headers or not,
+        # so a rename of an otherwise identical preset carries the name
         array = _FakeFleet({"app": _stored(_params())})
         run = _run_main(_params(new_name="renamed"), array, diff=True)
-        assert run.result["diff"]["before_header"] == "preset app"
-        assert run.result["diff"]["after_header"] == "preset renamed"
+        diff = run.result["diff"]
+        assert diff["before_header"] == "preset app"
+        assert diff["after_header"] == "preset renamed"
+        assert diff["before"] != diff["after"]
+        before = json.loads(diff["before"])
+        after = json.loads(diff["after"])
+        assert before.pop("name") == "app"
+        assert after.pop("name") == "renamed"
+        assert before == after
+
+    def test_no_name_in_the_diff_without_a_rename(self):
+        for params, store in (
+            (_params(), {"app": _stored(_params())}),
+            (_params(description="x"), {"app": _stored(_params())}),
+            (_params(), {}),
+            # An earlier run made the rename, so this run renames nothing
+            (_params(new_name="renamed"), {"renamed": _stored(_params(), "renamed")}),
+        ):
+            run = _run_main(params, _FakeFleet(store), diff=True)
+            assert "name" not in json.loads(run.result["diff"]["before"])
+            assert "name" not in json.loads(run.result["diff"]["after"])
 
     def test_no_change_diff_is_identical_both_sides(self):
         array = _FakeFleet({"app": _stored(_params())})
@@ -2710,35 +3466,27 @@ class TestFleetIdentity:
 
 class TestRestGating:
     def test_module_minimum_is_checked(self):
+        # Every body may carry policy_action, naming_patterns and rule suffixes,
+        # which the API defines from 2.51, so that is the floor
         run = _run_main(_minimal_params(), _FakeFleet())
         run.api_check.assert_called_once_with(
-            run.array, "2.40", run.module, "Workload presets"
+            run.array, "2.51", run.module, "Workload presets"
         )
 
-    def test_skip_verify_deployable_needs_2_51(self):
+    def test_skip_verify_deployable_needs_no_check_of_its_own(self):
+        # It arrived with 2.51, the floor
         run = _run_main(_minimal_params(skip_verify_deployable=True), _FakeFleet())
         assert [c.args[1:] for c in run.api_check.call_args_list] == [
-            ("2.40", run.module, "Workload presets"),
-            ("2.51", run.module, "skip_verify_deployable"),
+            ("2.51", run.module, "Workload presets"),
         ]
 
     def test_placement_targets_need_2_54(self):
-        params = _minimal_params()
-        params["placement"]["targets"] = [_reference("arrayB")]
-        run = _run_main(params, _FakeFleet())
-        assert [c.args[1:] for c in run.api_check.call_args_list] == [
-            ("2.40", run.module, "Workload presets"),
-            ("2.54", run.module, "Placement targets"),
-        ]
-
-    def test_everything_at_once(self):
         params = _minimal_params(skip_verify_deployable=True)
         params["placement"]["targets"] = [_reference("arrayB")]
         run = _run_main(params, _FakeFleet())
-        assert [c.args[2:] for c in run.api_check.call_args_list] == [
-            (run.module, "Workload presets"),
-            (run.module, "skip_verify_deployable"),
-            (run.module, "Placement targets"),
+        assert [c.args[1:] for c in run.api_check.call_args_list] == [
+            ("2.51", run.module, "Workload presets"),
+            ("2.54", run.module, "Placement targets"),
         ]
 
     def test_check_happens_before_any_preset_call(self):
@@ -2750,7 +3498,7 @@ class TestRestGating:
 
         run = _run_main(_minimal_params(), array, api_check=check)
         assert run.kind == "exit"
-        assert seen[0] == ("2.40", [])
+        assert seen[0] == ("2.51", [])
 
     def test_an_old_array_stops_the_run(self):
         array = _FakeFleet()
@@ -2762,19 +3510,324 @@ class TestRestGating:
 
         run = _run_main(_minimal_params(), array, api_check=refuse)
         assert run.kind == "fail"
-        assert "requires API version 2.40 or higher" in run.result["msg"]
+        assert "requires API version 2.51 or higher" in run.result["msg"]
         assert array.calls == []
 
     def test_no_fleet_check_when_nothing_gated_is_used(self):
         run = _run_main(_minimal_params(), _FakeFleet())
         assert len(run.api_check.call_args_list) == 1
 
-    def test_the_documented_sdk_floor(self):
-        assert preset_module.MIN_SDK_VERSION == "1.88.0"
-        assert preset_module.MIN_REQUIRED_API_VERSION == "2.40"
-        assert preset_module.SKIP_VERIFY_API_VERSION == "2.51"
-        assert preset_module.TARGETS_API_VERSION == "2.54"
-        assert "1.88.0" in preset_module.DOCUMENTATION
+    def test_the_rest_versions_in_the_notes_are_the_ones_checked(self):
+        yaml = pytest.importorskip("yaml")
+        doc = yaml.safe_load(preset_module.DOCUMENTATION)
+        notes = " ".join(doc["notes"])
+        match = re.search(
+            r"REST API ([0-9.]+) or higher, ([0-9.]+) for I\(placement\.targets\)",
+            notes,
+        )
+        assert match, notes
+        floor, targets = match.groups()
+        run = _run_main(_minimal_params(), _FakeFleet())
+        assert run.api_check.call_args.args[1] == floor
+        params = _minimal_params()
+        params["placement"]["targets"] = [_reference("arrayB")]
+        run = _run_main(params, _FakeFleet())
+        assert run.api_check.call_args.args[1] == targets
+        # No option claims a REST version of its own below the floor
+        skip = " ".join(doc["options"]["skip_verify_deployable"]["description"])
+        assert "REST" not in skip
+
+    def test_the_sdk_floor_is_the_same_everywhere_it_is_written(self):
+        # The module names the floor in its failure message; the collection
+        # names it in requirements.txt, the README and the shared doc
+        # fragment. They drift apart unless something looks.
+        root = pathlib.Path(__file__).resolve().parents[4]
+        floors = {}
+        for relative in (
+            "requirements.txt",
+            "README.md",
+            "plugins/doc_fragments/everpure.py",
+        ):
+            path = root / relative
+            if not path.is_file():
+                # A built artifact, or a copied plugins/ and tests/ tree
+                pytest.skip("%s is not in this tree, not a full checkout" % relative)
+            text = path.read_text(encoding="utf-8")
+            floors[relative] = re.findall(r"py-pure-client\s*>=\s*([0-9.]+)", text)
+        for relative, found in floors.items():
+            assert found == [preset_module.MIN_SDK_VERSION], (relative, found)
+
+
+# ---------------------------------------------------------------------------
+# A preset read back from a real fleet
+# ---------------------------------------------------------------------------
+
+SN1 = "sn1-x50r2-f07-30"
+DEFAULT_VOLUME_TEMPLATE = (
+    "{{functions.left(workload.name, 25)}}-"
+    "{{functions.left(workload.configuration.name, 25)}}-"
+    "{{functions.pad_left(workload.configuration.index, 4)}}"
+)
+DEFAULT_TEMPLATE = (
+    "{{functions.left(workload.name, 25)}}-"
+    "{{functions.left(workload.configuration.name, 25)}}"
+)
+
+
+def _test1_read_back():
+    """The lab preset ansibledev:test1 as py-pure-client 1.96.0 returned it
+
+    client.get_presets_workload(names=["test1"], context_names=["ansibledev"])
+    on Purity//FA 6.10.6, REST 2.54, with the item's to_dict(), which leaves out
+    every null field and keeps empty text and empty lists.
+    """
+    with (FIXTURES / "purefa_preset_test1.json").open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _test1_params(**overrides):
+    """The task that describes the lab preset test1, written from its fields"""
+    params = _params(
+        name="test1",
+        workload_type="SAP",
+        description="test1 description",
+        parameters=[
+            _param(
+                "volsize",
+                "integer",
+                subtype="size",
+                default="1073741824",
+                allowed_values=["1073741824", "2147483648"],
+                minimum=1073741824,
+                maximum=3221225472,
+            ),
+            _param(
+                "stringpar",
+                "string",
+                description="stringpar",
+                default="stringpardef",
+                allowed_values=["stringpardef", "anyother"],
+            ),
+            _param("boolpar", "boolean", description="boolpar decp", default="true"),
+            _param(
+                "resourcepar",
+                "resource_reference",
+                description="par resource",
+                resource_type="remote-arrays",
+                default=SN1,
+            ),
+            _param(
+                "resourcerefpar",
+                "resource_reference",
+                description="ref resource oar",
+                resource_type="storage-classes",
+                default="flasharray-c",
+            ),
+        ],
+        placement={
+            "name": "default-placement",
+            "storage_class": {"name": None, "parameter": "resourcerefpar"},
+            "qos": "default-qos",
+            "targets": None,
+        },
+        qos=[_qos("default-qos", iops_limit="1000000", bandwidth_limit="2621440000")],
+        snapshots=[
+            _snapshot("testsnap", rules=[_rule("86400000", "172800000", "39600000")])
+        ],
+        replications=[
+            _replication("testrepl", SN1, rules=[_rule("900000", "86400000")]),
+            _replication("par1", rules=[_rule("3600000", "7200000")]),
+        ],
+        volumes=[
+            _volume("test", count="2", replications=["par1"]),
+            _volume(
+                "test1",
+                count="2",
+                provisioned_size="2147483648",
+                replications=["testrepl"],
+            ),
+            _volume(
+                "testvol",
+                provisioned_size="{{ parameters.volsize }}",
+                snapshots=["testsnap"],
+                replications=["testrepl"],
+            ),
+        ],
+        tags=[
+            _tag("tag1", "{{ parameters.volsize }}"),
+            _tag("athing", "{{ parameters.stringpar }}"),
+            _tag("boolkey", "{{ parameters.boolpar }}"),
+        ],
+    )
+    params["replications"][1]["target"] = {"name": None, "parameter": "resourcepar"}
+    params.update(overrides)
+    return params
+
+
+class TestLabReadBack:
+    """normalise_preset of a real read-back against the body of the matching task
+
+    The other idempotency tests use _server_form, the module's own model of what
+    the array returns. This one uses what the array returned.
+    """
+
+    def test_the_fixture_is_the_lab_preset(self):
+        preset = _test1_read_back()
+        assert preset["name"] == "test1"
+        assert preset["revision"] == 8
+        assert preset["context"]["name"] == FLEET
+        assert not_a_block_preset(preset) is None
+        # The shapes the review called unproven on hardware are all here
+        assert preset["snapshot_configurations"][0]["rules"][0]["at"] == "39600000"
+        assert preset["periodic_replication_configurations"][0]["remote_targets"]
+        assert {p["type"] for p in preset["parameters"]} == {
+            "integer",
+            "string",
+            "boolean",
+            "resource_reference",
+        }
+
+    def test_the_matching_task_is_valid(self):
+        assert validate_preset(_test1_params()) == []
+
+    def test_normalised_read_back_equals_the_body_of_the_matching_task(self):
+        preset = _test1_read_back()
+        body = carry_over_naming(build_body(_test1_params()), preset)
+        assert normalise_preset(preset) == normalise_preset(body)
+
+    def test_the_naming_templates_are_what_carry_over_supplies(self):
+        # Without the carry-over the only difference is the array's templates,
+        # which are the defaults Purity//FA 6.10.6 fills in
+        preset = _test1_read_back()
+        bare = normalise_preset(build_body(_test1_params()))
+        full = normalise_preset(preset)
+        assert bare != full
+        # A placement names nothing, so the array gives it no template
+        assert "naming_patterns" not in full["placement_configurations"][0]
+        for section in CONFIG_SECTIONS:
+            if section == "placement_configurations":
+                continue
+            assert len(full[section]) == len(bare[section]) > 0
+            for stored, built in zip(full[section], bare[section]):
+                expected = (
+                    DEFAULT_VOLUME_TEMPLATE
+                    if section == "volume_configurations"
+                    else DEFAULT_TEMPLATE
+                )
+                assert stored.pop("naming_patterns") == [{"template": expected}]
+                assert "naming_patterns" not in built
+        assert bare == full
+
+    def test_the_documented_default_patterns_are_the_ones_the_array_fills_in(self):
+        # The DOCUMENTATION folds each long pattern over several lines, and
+        # YAML joins them back with single spaces. What it joins has to be the
+        # pattern the fixture shows the array filling in, and the fold has to
+        # keep every line well inside the 160 columns ansible-test allows
+        yaml = pytest.importorskip("yaml")
+        options = yaml.safe_load(preset_module.DOCUMENTATION)["options"]
+
+        def documented(section):
+            return " ".join(
+                options[section]["suboptions"]["naming_template"]["description"]
+            )
+
+        assert DEFAULT_VOLUME_TEMPLATE in documented("volumes")
+        assert DEFAULT_TEMPLATE in documented("qos")
+        assert DEFAULT_VOLUME_TEMPLATE not in documented("qos")
+        for section in ("snapshots", "replications"):
+            assert "same as for I(qos)" in documented(section)
+        longest = max(len(line) for line in preset_module.DOCUMENTATION.splitlines())
+        assert longest <= 120, longest
+
+    def test_the_matching_task_changes_nothing_on_the_fleet(self):
+        array = _FakeFleet({"test1": _test1_read_back()})
+        run = _run_main(_test1_params(), array)
+        assert run.kind == "exit"
+        assert run.result["changed"] is False
+        assert array.writes() == []
+        assert run.result["preset"] == {
+            "name": "test1",
+            "revision": 8,
+            "changed_sections": [],
+        }
+
+    @pytest.mark.parametrize(
+        "section,change",
+        [
+            (
+                "snapshot_configurations",
+                _set("snapshots.0.rules", [_rule("86400000", "172800000", "39600001")]),
+            ),
+            (
+                "snapshot_configurations",
+                _set("snapshots.0.rules", [_rule("86400000", "172800000")]),
+            ),
+            (
+                "snapshot_configurations",
+                _set("snapshots.0.policy_action", "always_create"),
+            ),
+            (
+                "periodic_replication_configurations",
+                _set("replications.0.target", _reference("slc6")),
+            ),
+            (
+                "periodic_replication_configurations",
+                # By name instead of through the parameter, which then goes
+                _many(
+                    _set("replications.1.target", _reference(SN1)),
+                    _drop_param("resourcepar"),
+                ),
+            ),
+            ("parameters", _set("parameters.0.subtype", "iops")),
+            ("parameters", _set("parameters.0.subtype", None)),
+            ("parameters", _set("parameters.2.default", "false")),
+            ("parameters", _set("parameters.3.default", "slc6")),
+            ("parameters", _set("parameters.4.default", None)),
+            ("parameters", _set("parameters.1.allowed_values", ["stringpardef"])),
+            (
+                "placement_configurations",
+                # By name instead of through the parameter, which then goes
+                _many(
+                    _set("placement.storage_class", _reference("flasharray-c")),
+                    _drop_param("resourcerefpar"),
+                ),
+            ),
+            ("qos_configurations", _set("qos.0.bandwidth_limit", "2621440512")),
+            ("volume_configurations", _set("volumes.0.count", "3")),
+            (
+                "workload_tags",
+                # A fixed value instead of the parameter, which then goes
+                _many(_set("tags.2.value", "true"), _drop_param("boolpar")),
+            ),
+        ],
+        ids=[
+            "at",
+            "at-removed",
+            "policy-action",
+            "replication-target-name",
+            "replication-target-parameter",
+            "subtype",
+            "subtype-removed",
+            "boolean-default",
+            "reference-default",
+            "reference-default-removed",
+            "string-allowed-values",
+            "storage-class-by-name",
+            "bandwidth",
+            "volume-count",
+            "tag-value",
+        ],
+    )
+    def test_each_field_of_the_read_back_is_compared(self, section, change):
+        params = _test1_params()
+        change(params)
+        assert validate_preset(params) == []
+        array = _FakeFleet({"test1": _test1_read_back()})
+        run = _run_main(params, array)
+        assert run.kind == "exit"
+        assert run.result["changed"] is True
+        assert section in run.result["preset"]["changed_sections"]
+        assert array.kinds() == ["get", "put", "get"]
 
 
 # ---------------------------------------------------------------------------
