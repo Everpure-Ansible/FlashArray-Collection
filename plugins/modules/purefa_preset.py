@@ -578,8 +578,8 @@ EXAMPLES = r"""
       - name: data
         count: '2'
         provisioned_size: '107374182400'
-        snapshots: [ hourly ]
-        replications: [ offsite ]
+        snapshots: [hourly]
+        replications: [offsite]
     tags:
       - key: app
         value: postgres
@@ -604,7 +604,7 @@ EXAMPLES = r"""
       - name: env
         type: string
         default: dev
-        allowed_values: [ dev, test, prod ]
+        allowed_values: [dev, test, prod]
     placement:
       storage_class:
         parameter: tier
