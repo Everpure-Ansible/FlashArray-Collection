@@ -235,7 +235,7 @@ def delete_ds(module, array):
             directory_service=directory_service,
         )
         check_response(
-            res, module, f"Delete {module.params['dstype']} Directory Service failed"
+            res, module, f"Delete {module.params['dstype']} Directory Service"
         )
     module.exit_json(changed=changed)
 
@@ -371,7 +371,7 @@ def update_ds(module, array):
             check_response(
                 res,
                 module,
-                f"{module.params['dstype'].capitalize()} Directory Service failed",
+                f"{module.params['dstype'].capitalize()} Directory Service",
             )
     module.exit_json(changed=changed)
 

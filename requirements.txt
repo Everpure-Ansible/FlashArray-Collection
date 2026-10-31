@@ -1,5 +1,5 @@
 distro
-py-pure-client >= 1.82.0
+py-pure-client >= 1.88.0
 netaddr >= 1.2.0
 requests
 pycountry

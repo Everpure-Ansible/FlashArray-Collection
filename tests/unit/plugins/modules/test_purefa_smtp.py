@@ -193,7 +193,7 @@ class TestDeleteSmtp:
         mock_check_response.assert_called_once_with(
             mock_array.patch_smtp_servers.return_value,
             mock_module,
-            "Delete SMTP settings failed",
+            "Delete SMTP settings",
         )
         mock_module.exit_json.assert_called_once_with(changed=True)
 
@@ -239,7 +239,7 @@ class TestDeleteSmtp:
             status_code=400, errors=[Mock(message="Not a valid hostname")]
         )
         mock_check_response.side_effect = lambda res, module, msg: module.fail_json(
-            msg="{0}. Error: {1}".format(msg, res.errors[0].message),
+            msg="{0} failed. Error: {1}".format(msg, res.errors[0].message),
             status_code=res.status_code,
         )
 

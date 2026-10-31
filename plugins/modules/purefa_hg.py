@@ -305,9 +305,7 @@ def update_hostgroup(module, array):
                         names=[module.params["name"]],
                         host_group=HostGroupPatch(name=module.params["rename"]),
                     )
-                    check_response(
-                        res, module, f"Rename to {module.params['rename']} failed"
-                    )
+                    check_response(res, module, f"Rename to {module.params['rename']}")
                     current_hostgroup = module.params["rename"]
                     renamed = True
             else:
@@ -475,7 +473,11 @@ def delete_hostgroup(module, array):
             module,
             f"Failed to get volume connection for hostgroup {module.params['name']}",
         )
-    remove_vols = [vol.volume.name for vol in vols]
+    # The array returns one connection row per member host, so a volume
+    # connected to a group of N hosts appears N times. Sending a name more
+    # than once makes delete_connections fail with HTTP 500, so keep the
+    # first occurrence of each.
+    remove_vols = list(dict.fromkeys(vol.volume.name for vol in vols))
     if remove_vols:
         changed = True
         if not module.check_mode:

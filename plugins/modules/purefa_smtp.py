@@ -175,7 +175,7 @@ def delete_smtp(module, array):
     changed = {k: current.get(k, "") for k in CLEARED_SMTP} != CLEARED_SMTP
     if changed and not module.check_mode:
         res = array.patch_smtp_servers(smtp=SmtpServer(password="", **CLEARED_SMTP))
-        check_response(res, module, "Delete SMTP settings failed")
+        check_response(res, module, "Delete SMTP settings")
     module.exit_json(changed=changed)
 
 

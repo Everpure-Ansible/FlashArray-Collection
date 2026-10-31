@@ -184,7 +184,7 @@ def update_role(module, array):
                 res,
                 module,
                 f"Deleting system-defined Directory Service Role "
-                f"{module.params['name']} failed",
+                f"{module.params['name']}",
             )
         module.exit_json(changed=True)
 
@@ -233,7 +233,7 @@ def update_role(module, array):
                     check_response(
                         res,
                         module,
-                        f"Update Directory Service Role {module.params['name']} failed",
+                        f"Update Directory Service Role {module.params['name']}",
                     )
         elif (
             getattr(role, "group_base", None) != module.params["group_base"]
@@ -258,7 +258,7 @@ def update_role(module, array):
                 check_response(
                     res,
                     module,
-                    f"Update Directory Service Role {module.params['name']} failed",
+                    f"Update Directory Service Role {module.params['name']}",
                 )
     else:
         if (
@@ -281,7 +281,7 @@ def update_role(module, array):
                 check_response(
                     res,
                     module,
-                    f"Update Directory Service Role {module.params['name']} failed",
+                    f"Update Directory Service Role {module.params['name']}",
                 )
     module.exit_json(changed=changed)
 
@@ -300,7 +300,7 @@ def delete_role(module, array):
         check_response(
             res,
             module,
-            f"Delete Directory Service Role {module.params['name']} failed",
+            f"Delete Directory Service Role {module.params['name']}",
         )
     module.exit_json(changed=changed)
 
@@ -342,7 +342,7 @@ def create_role(module, array):
             check_response(
                 res,
                 module,
-                f"Create Directory Service Role {module.params['name']} failed",
+                f"Create Directory Service Role {module.params['name']}",
             )
     module.exit_json(changed=changed)
 

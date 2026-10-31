@@ -207,7 +207,7 @@ def delete_dns(module, array):
                 module,
                 names=[MANAGEMENT],
             )
-            check_response(res, module, "Delete DNS settings failed")
+            check_response(res, module, "Delete DNS settings")
     module.exit_json(changed=changed)
 
 
@@ -233,7 +233,7 @@ def create_dns(module, array):
                     nameservers=module.params["nameservers"][0:3],
                 ),
             )
-            check_response(res, module, "Set DNS settings failed")
+            check_response(res, module, "Set DNS settings")
     module.exit_json(changed=changed)
 
 
@@ -285,9 +285,7 @@ def update_multi_dns(module, array):
             names=[module.params["name"]],
             dns=DnsPatch(**patch_kwargs),
         )
-        check_response(
-            res, module, f"Update to DNS service {module.params['name']} failed"
-        )
+        check_response(res, module, f"Update to DNS service {module.params['name']}")
     module.exit_json(changed=changed)
 
 

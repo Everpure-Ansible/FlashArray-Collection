@@ -23,6 +23,12 @@ description:
 - Enable or disable FlashArray API Clients
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
+notes:
+- The array only allows the enabled state of an existing API client to be
+  changed. I(public_key), I(issuer), I(role) and I(token_ttl) cannot be
+  changed in place, so when a supplied value differs from the array the
+  module warns and leaves the client as it is. Delete and recreate the
+  client to apply a new value.
 options:
   name:
     description:
@@ -52,10 +58,12 @@ options:
     type: str
   token_ttl:
     description:
-    - Time To Live length in seconds for the exchanged access token
-    - Range is 1 second to 1 day (86400 seconds)
+    - Time To Live, in seconds, of the access tokens exchanged for this
+      client's ID tokens. The array stores the value in milliseconds, so the
+      module multiplies the value given here by 1000.
+    - Range is 1 second to 1 day (86400 seconds).
+    - If not specified when creating a client, defaults to 86400.
     type: int
-    default: 86400
   enabled:
     description:
     - State of the API Client Key
@@ -70,7 +78,7 @@ EXAMPLES = r"""
   everpure.flasharray.purefa_apiclient:
     name: ansible-token
     issuer: "Everpure"
-    token_ttl: 3000
+    token_ttl: 3000  # seconds, sent to the array as 3000000 milliseconds
     role: array_admin
     public_key: "{{lookup('file', 'public_pem_file') }}"
     fa_url: 10.10.10.2
@@ -133,8 +141,41 @@ def delete_client(module, array):
 
 
 def update_client(module, array, client):
-    """Update API Client"""
+    """Update API Client
+
+    The array only allows the enabled state of an existing API client to be
+    changed (ApiClientPatch has no other field), so a supplied public_key,
+    issuer, role or token_ttl that differs from the array is reported as a
+    warning rather than silently ignored.
+    """
     changed = False
+    immutable = []
+    if module.params["public_key"] is not None:
+        # Compare ignoring whitespace so line wrapping or a trailing newline
+        # from a file lookup does not count as a different key.
+        current_key = "".join((getattr(client, "public_key", None) or "").split())
+        if "".join(module.params["public_key"].split()) != current_key:
+            immutable.append("public_key")
+    if module.params["issuer"] is not None and module.params["issuer"] != getattr(
+        client, "issuer", None
+    ):
+        immutable.append("issuer")
+    if module.params["role"] is not None and module.params["role"] != getattr(
+        client, "max_role", None
+    ):
+        immutable.append("role")
+    if module.params["token_ttl"] is not None and module.params[
+        "token_ttl"
+    ] * 1000 != getattr(client, "access_token_ttl_in_ms", None):
+        immutable.append("token_ttl")
+    if immutable:
+        module.warn(
+            "API Client {0}: {1} cannot be changed on an existing client and "
+            "will remain as currently set on the array. Delete and recreate "
+            "the client to apply the new value(s).".format(
+                module.params["name"], ", ".join(immutable)
+            )
+        )
     if client.enabled != module.params["enabled"]:
         changed = True
         if not module.check_mode:
@@ -151,6 +192,8 @@ def update_client(module, array, client):
 def create_client(module, array):
     """Create API Client"""
     changed = True
+    if module.params["token_ttl"] is None:
+        module.params["token_ttl"] = 86400
     if not 1 <= module.params["token_ttl"] <= 86400:
         module.fail_json(msg="token_ttl parameter is out of range (1 to 86400)")
     else:
@@ -195,7 +238,7 @@ def main():
                 choices=["readonly", "ops_admin", "storage_admin", "array_admin"],
             ),
             public_key=dict(type="str", no_log=True),
-            token_ttl=dict(type="int", default=86400, no_log=False),
+            token_ttl=dict(type="int", no_log=False),
             issuer=dict(type="str"),
         )
     )

@@ -122,6 +122,8 @@ PWD_POLICY_API_VERSION = "2.34"
 RA_API_VERSION = "2.35"
 DSROLE_POLICY_API_VERSION = "2.36"
 CONTEXT_API_VERSION = "2.38"
+# Fusion presets and workloads arrived two versions after fleets
+WORKLOAD_API_VERSION = "2.40"
 QUOTA_API_VERSION = "2.42"
 TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
@@ -1724,10 +1726,12 @@ def generate_snap_dict(array):
                 ).items
             )
             for remote_snap in remote_snaps:
-                remote_snap_name = remote_snap.name.split(":")[1]
+                # Drop only the offload prefix so a pod or realm volume
+                # snapshot keeps its "::" separators in the key
+                remote_snap_name = remote_snap.name.split(":", 1)[1]
                 remote_transfer = list(
                     array.get_remote_volume_snapshots_transfer(
-                        on=offload_name, names=[remote_snap]
+                        on=offload_name, names=[remote_snap.name]
                     ).items
                 )[0]
                 remote_dict = {
@@ -1810,7 +1814,7 @@ def generate_del_snap_dict(array):
                 array.get_remote_volume_snapshots(on=offload_name, destroyed=True).items
             )
             for remote_snap in remote_snaps:
-                remote_snap_name = remote_snap.name.split(":")[1]
+                remote_snap_name = remote_snap.name.split(":", 1)[1]
                 remote_transfer = list(
                     array.get_remote_volume_snapshots_transfer(
                         on=offload_name, names=[remote_snap.name]
@@ -2155,7 +2159,6 @@ def generate_host_dict(array, performance):
         host_info[hostname]["logged_in_ports"] = logged_in
         host_connections = list(array.get_connections(host_names=[hostname]).items)
         for connection in host_connections:
-            # LOCAL WORKAROUND - DO NOT COMMIT, see generate_workload_dict.
             # connection.host_group and connection.volume are both optional, so
             # reading through them unguarded raises rather than returning None.
             connection_dict = {
@@ -3370,9 +3373,12 @@ def generate_subs_dict(array):
 
 def generate_fleet_dict(array):
     fleet_info = {}
-    fleet = list(array.get_fleets().items)
+    res = array.get_fleets()
+    if res.status_code != 200:
+        return fleet_info
+    fleet = list(res.items)
     if fleet:
-        fleet_name = list(array.get_fleets().items)[0].name
+        fleet_name = fleet[0].name
         fleet_info[fleet_name] = {
             "members": {},
         }
@@ -3488,13 +3494,11 @@ def generate_preset_dict(array):
         return result
 
     preset_info = {}
-    response = array.get_presets_workload()
+    res = array.get_presets_workload()
+    if res.status_code != 200:
+        return preset_info
 
-    # Handle API errors gracefully
-    if hasattr(response, "errors") and response.errors:
-        raise RuntimeError(f"Failed to fetch presets: {response.errors}")
-
-    for preset in getattr(response, "items", []):
+    for preset in list(res.items):
         preset_name = getattr(preset, "name", None)
         if not preset_name:
             continue
@@ -3556,12 +3560,11 @@ def generate_preset_dict(array):
 
 
 def generate_workload_dict(array):
-    # LOCAL WORKAROUND - DO NOT COMMIT. Tracked separately in
-    # lab/bug-purefa_info-workload-status-details.md; applied only so the
-    # purefa_workload verification playbook can run past its purefa_info
-    # read-backs. Revert with: git checkout plugins/modules/purefa_info.py
     workload_info = {}
-    workloads = list(array.get_workloads().items)
+    res = array.get_workloads()
+    if res.status_code != 200:
+        return workload_info
+    workloads = list(res.items)
     if workloads:
         for workload in workloads:
             created = getattr(workload, "created", None)
@@ -4155,9 +4158,11 @@ def main():
     if LooseVersion(DSROLE_POLICY_API_VERSION) <= LooseVersion(api_version):
         if "realms" in subset or "all" in subset:
             info["realms"] = generate_realms_dict(array, performance)
-    if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
-        if "fleet" in subset or "all" in subset:
-            info["fleet"] = generate_fleet_dict(array)
+    if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version) and (
+        "fleet" in subset or "all" in subset
+    ):
+        info["fleet"] = generate_fleet_dict(array)
+    if LooseVersion(WORKLOAD_API_VERSION) <= LooseVersion(api_version):
         if "presets" in subset or "all" in subset:
             info["presets"] = generate_preset_dict(array)
         if "workloads" in subset or "all" in subset:

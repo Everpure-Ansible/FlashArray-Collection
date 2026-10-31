@@ -26,7 +26,7 @@ bugfixes:
 - purefa_hg - a repeated rename is a no-op; deleting an empty host group reports a change; ``lun`` without ``volume`` fails cleanly.
 - purefa_vg - a repeated rename no longer re-creates the old group; ``count`` without ``suffix``.
 - purefa_pg - members are added and removed idempotently and targets are only posted when missing.
-- purefa_pgsched - ``snap_at``, ``replicate_at`` and blackout windows are sent in milliseconds (they were 1000 times too small) together with ``enabled`` as the array requires; delete uses scaled frequencies.
+- purefa_pgsched - ``snap_at``, ``replicate_at`` and blackout windows are sent in seconds since midnight as the array stores them, and ``enabled`` is patched in its own request because the array ignores a frequency or time sent with it; delete uses scaled frequencies.
 - purefa_pgsnap - ``add_to_pgs`` is passed as protection group names (the SDK crashed on references without ids); check mode returns the suffix; plain copies honour ``with_default_protection``.
 - purefa_host - ``preferred_array`` error message, ``count`` with ``state absent`` fails clearly, CHAP clearing is idempotent.
 - purefa_endpoint - destroy and eradicate are idempotent and reachable; a rename repeat no longer re-creates the endpoint.

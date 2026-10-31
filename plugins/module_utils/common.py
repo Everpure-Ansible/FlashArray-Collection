@@ -37,9 +37,14 @@ def _findstr(text, match):
 
 def human_to_bytes(size):
     """Given a human-readable byte string (e.g. 2G, 30M),
-    return the number of bytes.  Will return 0 if the argument has
-    unexpected form.
+    return the number of bytes.  A string of digits with no unit
+    is already a byte count and is returned as an int.  Will return
+    0 if the argument has unexpected form.
     """
+    if not size:
+        return 0
+    if size.isdigit():
+        return int(size)
     bytes = size[:-1]
     unit = size[-1].upper()
     if bytes.isdigit():

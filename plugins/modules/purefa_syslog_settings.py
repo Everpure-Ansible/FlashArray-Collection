@@ -181,7 +181,7 @@ def main():
                     tls_audit_enabled=new_tls, logging_severity=new_sev
                 ),
             )
-        check_response(res, module, "Changing syslog settings failed")
+        check_response(res, module, "Changing syslog settings")
 
     module.exit_json(changed=changed)
 

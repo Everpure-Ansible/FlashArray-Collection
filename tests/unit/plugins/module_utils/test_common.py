@@ -108,10 +108,31 @@ class TestHumanToBytes:
     def test_invalid_unit_returns_zero(self):
         """Test that invalid unit returns 0."""
         assert human_to_bytes("100X") == 0
+        assert human_to_bytes("1X") == 0
 
     def test_non_numeric_returns_zero(self):
         """Test that non-numeric value returns 0."""
         assert human_to_bytes("abcG") == 0
+        assert human_to_bytes("abc") == 0
+
+    def test_plain_digits_are_bytes(self):
+        """Test that a unit-less digit string is taken as a byte count."""
+        assert human_to_bytes("1073741824") == 1073741824
+        assert human_to_bytes("1048576") == 1048576
+        assert human_to_bytes("512") == 512
+
+    def test_zero_returns_zero(self):
+        """Test that "0" (the clear-limit value) is still 0."""
+        assert human_to_bytes("0") == 0
+
+    def test_empty_string_returns_zero(self):
+        """Test that an empty string returns 0 rather than raising."""
+        assert human_to_bytes("") == 0
+
+    def test_digits_with_unit_unchanged(self):
+        """Test that a digit string followed by a unit is still scaled."""
+        assert human_to_bytes("1024K") == 1048576
+        assert human_to_bytes("1024k") == 1048576
 
 
 class TestHumanToReal:

@@ -381,7 +381,7 @@ def create_connection(module, array):
             module,
             array_connection=array_connection,
         )
-        check_response(res, module, "Array Connection failed")
+        check_response(res, module, "Array Connection")
     module.exit_json(changed=changed)
 
 

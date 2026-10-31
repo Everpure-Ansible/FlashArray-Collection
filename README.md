@@ -17,7 +17,7 @@ The Everpure FlashArray collection consists of the latest versions of the FlashA
     - some modules require higher versions of Purity
 - Some modules require specific Purity versions
 - distro
-- py-pure-client >= 1.82.0
+- py-pure-client >= 1.88.0
 - python >= 3.9
 - netaddr >= 1.2.0
 - requests
@@ -160,6 +160,7 @@ All modules are idempotent with the exception of modules that change or set pass
 - purefa_pod_replica - manage ActiveDR pod replica links in FlashArrays
 - purefa_policy - manage FlashArray NFS, SMB and snapshot policies
 - purefa_policy_management_access - manage FlashArray management-access (RBAC) policies
+- purefa_preset - manage Fusion block workload presets in a Fleet
 - purefa_proxy - manage the phonehome HTTPS proxy setting for the FlashArray
 - purefa_qos_policy - manage FlashArray QoS policies and their managed-directory attachments
 - purefa_ra - manage the Remote Assist setting for the FlashArray

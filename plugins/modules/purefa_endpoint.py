@@ -214,7 +214,7 @@ def create_endpoint(module, array):
                 ),
             ),
         )
-        check_response(res, module, f"Endpoint {module.params['name']} creation failed")
+        check_response(res, module, f"Endpoint {module.params['name']} creation")
     if module.params["host"]:
         if not module.check_mode:
             res = post_with_context(
@@ -287,8 +287,7 @@ def rename_endpoint(module, array, source_exists=True):
         check_response(
             res,
             module,
-            f"Rename endpoint {module.params['name']} "
-            f"to {module.params['rename']} failed",
+            f"Rename endpoint {module.params['name']} to {module.params['rename']}",
         )
 
     module.exit_json(changed=changed, volume=_volfact(module, array, target_name))
@@ -317,9 +316,7 @@ def delete_endpoint(module, array):
                 module,
                 names=[module.params["name"]],
             )
-            check_response(
-                res, module, f"Eradicate endpoint {module.params['name']} failed"
-            )
+            check_response(res, module, f"Eradicate endpoint {module.params['name']}")
             module.exit_json(changed=changed, volume=[])
     module.exit_json(
         changed=changed, volume=_volfact(module, array, module.params["name"])
@@ -338,9 +335,7 @@ def recover_endpoint(module, array):
             names=[module.params["name"]],
             volume=VolumePatch(destroyed=False),
         )
-        check_response(
-            res, module, f"Recovery of endpoint {module.params['name']} failed"
-        )
+        check_response(res, module, f"Recovery of endpoint {module.params['name']}")
     module.exit_json(
         changed=changed, volume=_volfact(module, array, module.params["name"])
     )
@@ -360,7 +355,7 @@ def eradicate_endpoint(module, array):
                 names=[module.params["name"]],
             )
             check_response(
-                res, module, f"Eradication of endpoint {module.params['name']} failed"
+                res, module, f"Eradication of endpoint {module.params['name']}"
             )
     module.exit_json(changed=changed, volume=[])
 

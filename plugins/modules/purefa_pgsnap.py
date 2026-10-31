@@ -228,10 +228,10 @@ EXAMPLES = r"""
 """
 
 RETURN = r"""
-snapshot:
-    description: Suffix of the created protection group snapshot.
+suffix:
+    description: Suffix of the protection group snapshot that was created.
     type: str
-    returned: success
+    returned: when I(state=present), including check mode
 """
 
 HAS_PURESTORAGE = True
@@ -526,9 +526,7 @@ def create_pgsnapshot(module, array):
                     protection_group_snapshot=suffix,
                 )
 
-        check_response(
-            res, module, f"Snapshot of pgroup {module.params['name']} failed"
-        )
+        check_response(res, module, f"Snapshot of pgroup {module.params['name']}")
         snap_data = list(res.items)[0]
     module.exit_json(
         changed=changed,
@@ -954,9 +952,15 @@ def main():
 
     pgroup = get_pgroup(module, array)
     if not pgroup:
-        module.fail_json(
-            msg="Protection Group {0} does not exist.".format(module.params["name"])
-        )
+        if state == "absent" and not module.params["offload"]:
+            # A local snapshot cannot outlive its protection group, so the
+            # snapshot is already absent. Offloaded snapshots can, so those
+            # still need the group to be addressable.
+            module.exit_json(changed=False)
+        else:
+            module.fail_json(
+                msg="Protection Group {0} does not exist.".format(module.params["name"])
+            )
     pgsnap = get_pgsnapshot(module, array)
     if pgsnap:
         pgsnap_deleted = pgsnap.destroyed

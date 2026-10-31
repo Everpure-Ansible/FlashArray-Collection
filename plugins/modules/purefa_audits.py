@@ -26,16 +26,19 @@ author:
 options:
   start:
     description:
-    - Start date and time (based on array local time)
+    - Only audit events logged at or after this date and time are returned.
+    - Interpreted in the timezone given by I(timezone), or in the timezone
+      resolved when I(timezone) is not provided.
     - If not provided epoch is assumed
     - Expected format "YYYY-MM-DD hh:mm:ss"
     type: str
   timezone:
     description:
-    - The timezone of the FlashArray
-    - If not provided, the module will attempt to get the current local timezone
-      from the server however from Purity//FA 6.5.3 this value will calculated
-      automatically from the FlashArray
+    - The timezone in which I(start) is interpreted and in which the C(time)
+      of each returned audit event is reported, for example C(America/New_York).
+    - If not provided, the timezone configured on the FlashArray is used
+      (Purity//FA 6.5.3 and later). On older Purity versions the local timezone
+      of the host running the module is used instead, falling back to UTC.
     type: str
   context:
     description:
@@ -64,6 +67,50 @@ EXAMPLES = r"""
 """
 
 RETURN = r"""
+purefa_audits:
+  description:
+    - The audit events read from the array, keyed by audit record name.
+    - A field the array did not record for an event is returned as C(none).
+  returned: always
+  type: dict
+  contains:
+    time:
+      description:
+        - When the command was run, as C(YYYY-MM-DD HH:MM:SS ZONE) in the
+          timezone given by I(timezone) or the timezone resolved when
+          I(timezone) is not provided.
+      type: str
+      sample: 2024-06-29 12:31:34 EDT
+    arguments:
+      description: The arguments provided to the command.
+      type: str
+      sample: --size 10G vol1
+    user:
+      description: The user who ran the command.
+      type: str
+      sample: pureuser
+    command:
+      description: The top level command, which by convention starts with C(pure).
+      type: str
+      sample: purevol
+    subcommand:
+      description:
+        - The C(command) and C(subcommand) combination determines which
+          action the user attempted to perform.
+      type: str
+      sample: create
+    origin:
+      description: The name of the array from which the command originated.
+      type: str
+      sample: arrayA
+  sample:
+    "1044":
+      time: 2024-06-29 12:31:34 EDT
+      arguments: --size 10G vol1
+      user: pureuser
+      command: purevol
+      subcommand: create
+      origin: arrayA
 """
 
 HAS_PYTZ = True

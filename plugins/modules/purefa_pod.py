@@ -444,7 +444,7 @@ def create_pod(module, array):
                 names=[module.params["name"]],
                 pod=PodPost(),
             )
-        check_response(res, module, f"Pod {module.params['name']} creation failed")
+        check_response(res, module, f"Pod {module.params['name']} creation")
         if module.params["mediator"] != "purestorage":
             res = patch_with_context(
                 array,
@@ -539,7 +539,7 @@ def create_pod(module, array):
                 check_response(
                     res,
                     module,
-                    f"Deleting safemode default pgroup {module.params['name']} failed",
+                    f"Deleting safemode default pgroup {module.params['name']}",
                 )
                 res = delete_with_context(
                     array,
@@ -551,7 +551,7 @@ def create_pod(module, array):
                 check_response(
                     res,
                     module,
-                    f"Eradicating safemode default pgroup {module.params['name']} failed",
+                    f"Eradicating safemode default pgroup {module.params['name']}",
                 )
             clear_dp, new_pg = default_protection_request(module)
             if (
@@ -651,7 +651,7 @@ def clone_pod(module, array):
                 check_response(
                     res,
                     module,
-                    f"Clone pod {module.params['name']} to pod {module.params['target']} failed",
+                    f"Clone pod {module.params['name']} to pod {module.params['target']}",
                 )
         else:
             module.fail_json(
@@ -1079,7 +1079,7 @@ def delete_pod(module, array):
             pod=PodPatch(destroyed=True),
             destroy_contents=module.params["delete_contents"],
         )
-        check_response(res, module, f"Delete pod {module.params['name']} failed")
+        check_response(res, module, f"Delete pod {module.params['name']}")
         if module.params["eradicate"]:
             res = delete_with_context(
                 array,
@@ -1089,7 +1089,7 @@ def delete_pod(module, array):
                 names=[module.params["name"]],
                 eradicate_contents=module.params["delete_contents"],
             )
-            check_response(res, module, f"Eradicate pod {module.params['name']} failed")
+            check_response(res, module, f"Eradicate pod {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -1107,9 +1107,7 @@ def eradicate_pod(module, array):
                 names=[module.params["name"]],
                 eradicate_contents=module.params["delete_contents"],
             )
-            check_response(
-                res, module, f"Eradication of pod {module.params['name']} failed"
-            )
+            check_response(res, module, f"Eradication of pod {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -1125,7 +1123,7 @@ def recover_pod(module, array):
             names=[module.params["name"]],
             pod=PodPatch(destroyed=False),
         )
-        check_response(res, module, f"Recovery of pod {module.params['name']} failed")
+        check_response(res, module, f"Recovery of pod {module.params['name']}")
     module.exit_json(changed=changed)
 
 

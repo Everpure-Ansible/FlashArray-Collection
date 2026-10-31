@@ -183,7 +183,7 @@ def delete_ntp(module, array):
                 module,
                 array=Arrays(ntp_servers=[]),
             )
-            check_response(res, module, "Deletion of NTP servers failed")
+            check_response(res, module, "Deletion of NTP servers")
     module.exit_json(changed=changed)
 
 
@@ -200,7 +200,7 @@ def create_ntp(module, array):
             module,
             array=Arrays(ntp_servers=module.params["ntp_servers"][0:4]),
         )
-        check_response(res, module, "Update of NTP servers failed")
+        check_response(res, module, "Update of NTP servers")
     module.exit_json(changed=changed)
 
 
