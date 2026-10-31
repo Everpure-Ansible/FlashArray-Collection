@@ -100,7 +100,7 @@ def set_eula(module, array):
                     )
                 )
             )
-            check_response(res, module, "Signing EULA failed")
+            check_response(res, module, "Signing EULA")
     else:
         module.warn("EULA already signed")
     module.exit_json(changed=changed)

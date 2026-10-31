@@ -149,7 +149,7 @@ def delete_fs(module, array):
             check_response(
                 res,
                 module,
-                f"Eradication of file system {module.params['name']} failed",
+                f"Eradication of file system {module.params['name']}",
             )
     module.exit_json(changed=changed)
 
@@ -380,9 +380,7 @@ def move_fs(module, array):
             names=[module.params["name"]],
             file_system=file_system,
         )
-        check_response(
-            move_res, module, f"Move of filesystem {module.params['name']} failed"
-        )
+        check_response(move_res, module, f"Move of filesystem {module.params['name']}")
     module.exit_json(changed=changed)
 
 

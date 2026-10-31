@@ -1,0 +1,60 @@
+bugfixes:
+  - purefa_hg - deleting a host group with more than one member host and connected
+    volumes no longer fails with ``Unidentified internal error``; each volume is
+    disconnected once instead of once per host.
+  - purefa_pg - a protection group in a pod inside a realm (``realm::pod::pg``) can be
+    renamed; the module looked up and patched ``realm::new-name`` instead of
+    ``realm::pod::new-name``.
+  - purefa_pg - ``state absent`` on a protection group whose pod no longer exists
+    reports no change instead of failing with ``Pod ... does not exist``.
+  - purefa_pgsnap - ``state absent`` on a snapshot whose protection group no longer
+    exists reports no change instead of failing; the failure is kept for every other
+    state and for offloaded snapshots, which can outlive the source group.
+  - purefa_pgsnap - the RETURN documentation describes the ``suffix`` key the module
+    returns, not a ``snapshot`` key that was never returned.
+  - purefa_info - the ``presets`` and ``workloads`` subsets are gathered from REST 2.40,
+    where py-pure-client provides the calls, instead of failing with ``AttributeError``
+    on REST 2.38 and 2.39 arrays; ``fleet`` is still gathered from REST 2.38.
+  - purefa_info - the ``fleet``, ``presets`` and ``workloads`` sections are empty instead
+    of a traceback when the array does not support Fusion or the read does not succeed.
+  - purefa_info - offload-target snapshots of pod and realm volumes are keyed by their
+    full ``pod::vol.suffix`` or ``realm::pod::vol.suffix`` name in the ``snapshots`` and
+    ``deleted_snapshots`` sections, and their transfer details are looked up by name
+    rather than by the snapshot object.
+  - purefa_pod - ``quota`` given as a plain number of bytes is applied as documented; it
+    was silently ignored on create and update.
+  - purefa_realm - ``quota`` given as a plain number of bytes is accepted as documented
+    instead of being converted to 0, which failed realm creation with a misleading
+    minimum-size error and could set a zero quota on update.
+  - purefa_volume, purefa_vg, purefa_policy - a unit-less ``size``, ``bw_qos`` or
+    ``quota_limit`` value is treated as bytes instead of 0; a plain-number ``bw_qos`` on
+    an existing volume silently removed the bandwidth limit, a plain-number volume
+    ``size`` was ignored on update, and vgroup and quota-policy values were sent to the
+    array as 0.
+  - purefa_apiclient - a run whose ``public_key``, ``issuer``, ``role`` or ``token_ttl``
+    differ from an existing API client warns instead of silently reporting ok; the array
+    only allows ``enabled`` to be changed in place, so the client must be deleted and
+    recreated to apply them.
+  - purefa_audits - an audit record that does not carry every field (for example
+    ``arguments``, ``subcommand`` or ``origin``) no longer raises ``AttributeError``; the
+    missing field is returned as ``none``.
+  - purefa_audits - the ``start`` and ``timezone`` option descriptions are corrected;
+    ``timezone`` is the zone in which ``start`` is interpreted and the returned times are
+    reported, and the array's own timezone is only read when ``timezone`` is omitted.
+  - purefa_cbsexpand, purefa_certs, purefa_connect, purefa_console, purefa_dns, purefa_ds,
+    purefa_dsrole, purefa_dsrole_old, purefa_endpoint, purefa_eula, purefa_fleet,
+    purefa_fs, purefa_hg, purefa_host, purefa_kmip, purefa_maintenance, purefa_ntp,
+    purefa_pg, purefa_pgsched, purefa_pgsnap, purefa_phonehome, purefa_pod, purefa_proxy,
+    purefa_ra, purefa_realm, purefa_smtp, purefa_snmp, purefa_syslog,
+    purefa_syslog_settings, purefa_tgroup, purefa_user, purefa_vg, purefa_vnc,
+    purefa_volume, purefa_workload - array error messages no longer double the word
+    ``failed`` (for example ``Delete pod x failed failed.``).
+minor_changes:
+  - purefa_apiclient - ``token_ttl`` is documented as seconds (1-86400), converted to
+    milliseconds for the array; ``86400`` is applied only when creating a client, so an
+    unset ``token_ttl`` is not compared against an existing client.
+  - purefa_audits - the ``purefa_audits`` return value is documented; a dictionary keyed
+    by audit record name with ``time``, ``arguments``, ``user``, ``command``,
+    ``subcommand`` and ``origin`` for each event.
+  - purefa_volume - the documentation shows that a volume in a pod that lives in a realm
+    is addressed as ``REALM_NAME::POD_NAME::VOLUME_NAME``.

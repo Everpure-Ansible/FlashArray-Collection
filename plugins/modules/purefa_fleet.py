@@ -156,9 +156,7 @@ def delete_fleet(module, array):
     if LooseVersion(DELETE_FLEET_API_VERSION) <= LooseVersion(api_version):
         if not module.check_mode:
             res = array.delete_fleets(names=[module.params["name"]])
-            check_response(
-                res, module, f"Fleet {module.params['name']} deletion failed"
-            )
+            check_response(res, module, f"Fleet {module.params['name']} deletion")
     else:
         module.fail_json(
             msg="Purity//FA version not supported. Minimum version required: 6.8.2"
@@ -239,7 +237,7 @@ def add_fleet_members(module, array):
             check_response(
                 res,
                 module,
-                f"Array {local_name} failed to join fleet {module.params['name']}",
+                f"Joining array {local_name} to fleet {module.params['name']}",
             )
     module.exit_json(changed=changed)
 
@@ -296,7 +294,7 @@ def delete_fleet_members(module, array):
                 check_response(
                     res,
                     module,
-                    f"Array {module.params['member_url']} failed to be removed from fleet",
+                    f"Removing array {module.params['member_url']} from fleet",
                 )
     module.exit_json(changed=changed)
 
@@ -312,7 +310,7 @@ def rename_fleet(module, array):
                 names=[module.params["name"]],
                 fleet=FleetPatch(name=module.params["rename"]),
             )
-            check_response(res, module, "Fleet rename failed")
+            check_response(res, module, "Fleet rename")
     module.exit_json(changed=changed)
 
 

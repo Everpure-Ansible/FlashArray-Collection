@@ -217,7 +217,7 @@ def rename_realm(module, array):
             names=[module.params["name"]],
             realm=RealmPatch(name=module.params["rename"]),
         )
-        check_response(res, module, f"Rename to {module.params['rename']} failed")
+        check_response(res, module, f"Rename to {module.params['rename']}")
     module.exit_json(changed=changed)
 
 
@@ -236,15 +236,11 @@ def make_realm(module, array):
             res = array.post_realms(
                 names=[module.params["name"]], realm=RealmPost(quota_limit=quota)
             )
-            check_response(
-                res, module, f"Creation of realm {module.params['name']} failed"
-            )
+            check_response(res, module, f"Creation of realm {module.params['name']}")
     else:
         if not module.check_mode:
             res = array.post_realms(names=[module.params["name"]])
-            check_response(
-                res, module, f"Creation of realm {module.params['name']} failed"
-            )
+            check_response(res, module, f"Creation of realm {module.params['name']}")
     if module.params["bw_qos"] and not module.params["iops_qos"]:
         if int(human_to_bytes(module.params["bw_qos"])) in range(1048576, 549755813888):
             changed = True
@@ -258,7 +254,7 @@ def make_realm(module, array):
                     ),
                 )
                 check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS failed"
+                    res, module, f"Setting of realm {module.params['name']} QoS"
                 )
         else:
             module.fail_json(
@@ -279,7 +275,7 @@ def make_realm(module, array):
                     ),
                 )
                 check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS failed"
+                    res, module, f"Setting of realm {module.params['name']} QoS"
                 )
         else:
             module.fail_json(
@@ -304,7 +300,7 @@ def make_realm(module, array):
                     ),
                 )
                 check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS failed"
+                    res, module, f"Setting of realm {module.params['name']} QoS"
                 )
         else:
             module.fail_json(msg="IOPs or Bandwidth QoS value out of range.")
@@ -332,7 +328,7 @@ def update_realm(module, array):
                 check_response(
                     res,
                     module,
-                    f"Realm {module.params['name']} Bandwidth QoS clear failed",
+                    f"Realm {module.params['name']} Bandwidth QoS clear",
                 )
     elif module.params["bw_qos"]:
         if int(human_to_bytes(module.params["bw_qos"])) != current_realm["bw"]:
@@ -354,7 +350,7 @@ def update_realm(module, array):
                     check_response(
                         res,
                         module,
-                        f"Realm {module.params['name']} Bandwidth QoS change failed",
+                        f"Realm {module.params['name']} Bandwidth QoS change",
                     )
             else:
                 module.fail_json(
@@ -373,7 +369,7 @@ def update_realm(module, array):
                 check_response(
                     res,
                     module,
-                    f"Realm {module.params['name']} IOPs QoS clear failed",
+                    f"Realm {module.params['name']} IOPs QoS clear",
                 )
     elif module.params["iops_qos"]:
         if int(human_to_real(module.params["iops_qos"])) != current_realm["iops"]:
@@ -391,7 +387,7 @@ def update_realm(module, array):
                     check_response(
                         res,
                         module,
-                        f"Realm {module.params['name']} IOPs QoS change failed",
+                        f"Realm {module.params['name']} IOPs QoS change",
                     )
             else:
                 module.fail_json(
@@ -413,7 +409,7 @@ def update_realm(module, array):
                     check_response(
                         res,
                         module,
-                        f"Realm {module.params['name']} quota change failed",
+                        f"Realm {module.params['name']} quota change",
                     )
             else:
                 module.fail_json(
@@ -432,7 +428,7 @@ def recover_realm(module, array):
         res = array.patch_realms(
             names=[module.params["name"]], realm=RealmPatch(destroyed=False)
         )
-        check_response(res, module, f"Recovery of realm {module.params['name']} failed")
+        check_response(res, module, f"Recovery of realm {module.params['name']}")
 
     module.exit_json(changed=changed)
 
@@ -445,7 +441,7 @@ def eradicate_realm(module, array):
             names=[module.params["name"]],
             eradicate_contents=module.params["delete_contents"],
         )
-        check_response(res, module, f"Eradicating realm {module.params['name']} failed")
+        check_response(res, module, f"Eradicating realm {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -459,7 +455,7 @@ def delete_realm(module, array):
             ignore_usage=module.params["ignore_usage"],
             realm=RealmPatch(destroyed=True),
         )
-        check_response(res, module, f"Deleting realm {module.params['name']} failed")
+        check_response(res, module, f"Deleting realm {module.params['name']}")
     if module.params["eradicate"]:
         eradicate_realm(module, array)
 

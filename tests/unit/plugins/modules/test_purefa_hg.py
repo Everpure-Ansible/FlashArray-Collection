@@ -1492,3 +1492,50 @@ class TestQaFixes:
 
         mock_array.delete_host_groups.assert_not_called()
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_hg.check_response")
+    @patch("plugins.modules.purefa_hg.get_hostgroup_hosts")
+    @patch("plugins.modules.purefa_hg.LooseVersion", side_effect=LooseVersion)
+    def test_delete_hostgroup_deduplicates_volume_connections(
+        self, mock_lv, mock_get_hostgroup_hosts, mock_check_response
+    ):
+        """The array returns one connection row per member host, so a group
+        of two hosts with two volumes yields four rows; delete_connections
+        must be sent each volume name once or the array answers 500"""
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {"name": "test-hg", "context": ""}
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+
+        # Rows as the array returns them: [vol1, vol1, vol2, vol2]
+        rows = []
+        for vol_name in ("vol1", "vol2"):
+            for host_name in ("host1", "host2"):
+                row = Mock()
+                row.host.name = host_name
+                row.volume.name = vol_name
+                rows.append(row)
+        mock_array.get_connections.return_value = Mock(status_code=200, items=rows)
+        mock_array.delete_connections.return_value = Mock(status_code=200)
+        mock_array.delete_host_groups_hosts.return_value = Mock(status_code=200)
+        mock_array.delete_host_groups.return_value = Mock(status_code=200)
+
+        mock_host1 = Mock()
+        mock_host1.member.name = "host1"
+        mock_host1.group.name = "test-hg"
+        mock_host2 = Mock()
+        mock_host2.member.name = "host2"
+        mock_host2.group.name = "test-hg"
+        mock_get_hostgroup_hosts.return_value = [mock_host1, mock_host2]
+
+        delete_hostgroup(mock_module, mock_array)
+
+        mock_array.delete_connections.assert_called_once_with(
+            host_group_names=["test-hg"], volume_names=["vol1", "vol2"]
+        )
+        mock_array.delete_host_groups_hosts.assert_called_once_with(
+            group_names=["test-hg"], member_names=["host1", "host2"]
+        )
+        mock_array.delete_host_groups.assert_called_once_with(names=["test-hg"])
+        mock_module.exit_json.assert_called_once_with(changed=True)

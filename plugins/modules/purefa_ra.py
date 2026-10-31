@@ -181,7 +181,7 @@ def disable_ra(module, array):
         changed = True
         if not module.check_mode:
             res = array.patch_support(support=SupportPatch(remote_assist_active=False))
-            check_response(res, module, "Disabling Remote Assist failed")
+            check_response(res, module, "Disabling Remote Assist")
     module.exit_json(changed=changed)
 
 

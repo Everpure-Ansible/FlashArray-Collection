@@ -287,7 +287,7 @@ def update_cert(module, array):
             check_response(
                 res,
                 module,
-                f"Updating existing SSL certificate {module.params['name']} failed",
+                f"Updating existing SSL certificate {module.params['name']}",
             )
 
     module.exit_json(changed=changed)
@@ -314,7 +314,7 @@ def create_cert(module, array):
         check_response(
             res,
             module,
-            f"Creating SSL certificate {module.params['name']} failed",
+            f"Creating SSL certificate {module.params['name']}",
         )
 
     module.exit_json(changed=changed)
@@ -353,7 +353,7 @@ def import_cert(module, array, reimport=False):
             res = array.post_certificates(
                 names=[module.params["name"]], certificate=certificate
             )
-        check_response(res, module, "Importing Certificate failed")
+        check_response(res, module, "Importing Certificate")
     module.exit_json(changed=changed)
 
 
@@ -362,7 +362,7 @@ def export_cert(module, array):
     changed = True
     if not module.check_mode:
         ssl = array.get_certificates(names=[module.params["name"]])
-        check_response(ssl, module, "Exporting Certificate failed")
+        check_response(ssl, module, "Exporting Certificate")
         with open(module.params["export_file"], "w", encoding="utf-8") as ssl_file:
             ssl_file.write(list(ssl.items)[0].certificate)
     module.exit_json(changed=changed)

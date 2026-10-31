@@ -434,7 +434,7 @@ def update_tgroup(module, array, tgroup=None, members=None):
                     fail_on_error(
                         res,
                         module,
-                        f"Rename to {module.params['rename']} failed",
+                        f"Rename to {module.params['rename']}",
                     )
                 current_name = module.params["rename"]
                 renamed = True

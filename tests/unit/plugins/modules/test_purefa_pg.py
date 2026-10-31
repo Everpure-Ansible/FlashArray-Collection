@@ -1249,6 +1249,30 @@ class TestRenameExistsContainer:
         assert "pod1::new-pg" in str(call_args)
 
     @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
+    def test_rename_exists_in_realm_pod(self, mock_lv):
+        """Test rename_exists keeps the whole container for a pod inside a realm
+
+        Containers nest, so the target is myrealm::pod1::new-pg. The lookup
+        previously asked for myrealm::new-pg, so the rename never happened.
+        """
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "myrealm::pod1::old-pg",
+            "rename": "new-pg",
+            "context": "",
+        }
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_protection_groups.return_value = Mock(status_code=404, items=[])
+
+        result = rename_exists(mock_module, mock_array)
+
+        assert result is False
+        mock_array.get_protection_groups.assert_called_once_with(
+            names=["myrealm::pod1::new-pg"]
+        )
+
+    @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
     def test_rename_exists_no_container(self, mock_lv):
         """Test rename_exists for standalone pgroup"""
         mock_module = Mock()
@@ -1887,6 +1911,60 @@ class TestUpdatePgroupRename:
         assert mock_module.params["name"] == "pod1::new-pg"
         mock_module.exit_json.assert_called()
 
+    @patch("plugins.modules.purefa_pg.ProtectionGroup")
+    @patch("plugins.modules.purefa_pg.rename_exists")
+    @patch("plugins.modules.purefa_pg.get_pgroup_sched")
+    @patch("plugins.modules.purefa_pg.check_response")
+    @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
+    def test_rename_pgroup_in_realm_pod_container(
+        self,
+        mock_lv,
+        mock_check_response,
+        mock_get_pgroup_sched,
+        mock_rename_exists,
+        mock_pg_model,
+    ):
+        """Test renaming a protection group in a pod inside a realm
+
+        The PATCH must name myrealm::pod1::new-pg; it previously dropped the
+        pod and named myrealm::new-pg, which the array rejected.
+        """
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "myrealm::pod1::old-pg",
+            "rename": "new-pg",
+            "volume": None,
+            "host": None,
+            "hostgroup": None,
+            "target": None,
+            "eradicate": False,
+            "state": "present",
+            "enabled": None,
+            "context": "",
+            "safe_mode": None,
+        }
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_rename_exists.return_value = False
+        mock_pg = Mock()
+        mock_pg.retention_lock = "unlocked"
+        mock_array.patch_protection_groups.return_value = Mock(status_code=200)
+        mock_array.get_protection_groups.return_value = Mock(
+            status_code=200, items=[mock_pg]
+        )
+        mock_get_pgroup_sched.return_value = Mock()
+
+        update_pgroup(mock_module, mock_array)
+
+        mock_pg_model.assert_called_once_with(name="myrealm::pod1::new-pg")
+        mock_array.patch_protection_groups.assert_called_once_with(
+            names=["myrealm::pod1::old-pg"],
+            protection_group=mock_pg_model.return_value,
+        )
+        assert mock_module.params["name"] == "myrealm::pod1::new-pg"
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
     @patch("plugins.modules.purefa_pg.rename_exists")
     @patch("plugins.modules.purefa_pg.get_pgroup_sched")
     @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
@@ -2332,6 +2410,100 @@ class TestMain:
         assert "Pod myrealm::pod1 does not exist" in str(
             mock_module.fail_json.call_args
         )
+
+    @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_pg.check_response")
+    @patch("plugins.modules.purefa_pg.get_array")
+    @patch("plugins.modules.purefa_pg.AnsibleModule")
+    def test_main_absent_pod_not_exists_is_noop(
+        self, mock_ansible, mock_get_array, mock_check_response, mock_lv
+    ):
+        """state=absent on a group whose pod is gone reports no change
+
+        A group cannot exist in a pod that does not, so once the pod is
+        eradicated the task previously failed "Pod ... does not exist."
+        instead of being idempotent. Uses the real get_pod/get_pgroup lookups
+        against the array mock.
+        """
+        import pytest
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "myrealm::pod1::test-pg",
+            "rename": None,
+            "state": "absent",
+            "volume": None,
+            "host": None,
+            "hostgroup": None,
+            "target": None,
+            "safe_mode": False,
+            "eradicate": True,
+            "enabled": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_arrays.return_value.items = [Mock()]
+        mock_array.get_protection_groups.return_value = Mock(status_code=400, items=[])
+        mock_array.get_pods.return_value = Mock(status_code=400, items=[])
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_array.get_pods.assert_called_once_with(names=["myrealm::pod1"])
+        mock_module.exit_json.assert_called_once_with(changed=False)
+        mock_module.fail_json.assert_not_called()
+        mock_array.patch_protection_groups.assert_not_called()
+        mock_array.delete_protection_groups.assert_not_called()
+
+    @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_pg.check_response")
+    @patch("plugins.modules.purefa_pg.get_array")
+    @patch("plugins.modules.purefa_pg.AnsibleModule")
+    def test_main_present_pod_not_exists_still_fails(
+        self, mock_ansible, mock_get_array, mock_check_response, mock_lv
+    ):
+        """state=present with the pod gone still fails, as before"""
+        import pytest
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "myrealm::pod1::test-pg",
+            "rename": None,
+            "state": "present",
+            "volume": None,
+            "host": None,
+            "hostgroup": None,
+            "target": None,
+            "safe_mode": False,
+            "eradicate": False,
+            "enabled": None,
+            "context": "",
+        }
+        mock_module.check_mode = False
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_arrays.return_value.items = [Mock()]
+        mock_array.get_protection_groups.return_value = Mock(status_code=400, items=[])
+        mock_array.get_pods.return_value = Mock(status_code=400, items=[])
+        mock_get_array.return_value = mock_array
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once_with(
+            msg="Pod myrealm::pod1 does not exist."
+        )
+        mock_module.exit_json.assert_not_called()
+        mock_array.post_protection_groups.assert_not_called()
 
     @patch("plugins.modules.purefa_pg.LooseVersion", side_effect=LooseVersion)
     @patch("plugins.modules.purefa_pg.check_response")

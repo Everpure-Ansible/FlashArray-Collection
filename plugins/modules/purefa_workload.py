@@ -1043,7 +1043,7 @@ def _create_volume(module, array, context):
         ),
         context_names=[context],
     )
-    check_response(res, module, "Workload volume creation failed")
+    check_response(res, module, "Workload volume creation")
     return list(res.items)[0].name
 
 
@@ -1119,7 +1119,7 @@ def _ask_fusion_for_placement(module, array, route, preset_config):
         preset_names=[module.params["preset"]],
         context_names=[route],
     )
-    check_response(res, module, "Recommendation calculation failure")
+    check_response(res, module, "Recommendation calculation")
     workload_calc = getattr(list(res.items)[0], "name", None)
     # A calculation, not a change, so this runs in check mode too - it is what lets a
     # check-mode run report the target Fusion would have chosen
@@ -1295,7 +1295,7 @@ def delete_workload(module, array, context, workload=None):
             workload=WorkloadPatch(destroyed=True),
             context_names=[context],
         )
-        check_response(res, module, "Workload deletion failed")
+        check_response(res, module, "Workload deletion")
         # The PATCH response reports destroyed=True and the time_remaining
         # countdown until eradication, so use it rather than the pre-delete read
         deleted = list(res.items)[0]
@@ -1315,7 +1315,7 @@ def eradicate_workload(module, array, context):
             names=[module.params["name"]],
             context_names=[context],
         )
-        check_response(res, module, "Workload eradication failed")
+        check_response(res, module, "Workload eradication")
         if module.params["wait"]:
             _wait_for_absent(module, array, context)
     # The workload no longer exists, so there are no facts left to read off it - but
@@ -1349,7 +1349,7 @@ def recover_workload(module, array, context, workload=None):
             workload=WorkloadPatch(destroyed=False),
             context_names=[context],
         )
-        check_response(res, module, "Workload recovery failed")
+        check_response(res, module, "Workload recovery")
         recovered = list(res.items)[0]
         if module.params["wait"]:
             recovered = _wait_for_status(module, array, context, "ready")
@@ -1384,7 +1384,7 @@ def rename_workload(module, array, context, workload=None):
             workload=WorkloadPatch(name=module.params["rename"]),
             context_names=[context],
         )
-        check_response(res, module, "Workload rename failed")
+        check_response(res, module, "Workload rename")
         # Reports the new name, as returned by the PATCH response
         workload_facts = _workload_facts(module, array, list(res.items)[0], context)
     module.exit_json(changed=changed, workload=workload_facts)

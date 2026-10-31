@@ -426,7 +426,7 @@ def _set_host_initiators(module, array):
             host=HostPatch(nqns=module.params["nqn"]),
         )
         check_response(
-            res, module, f"Setting of NVMe NQN failed for host {module.params['name']}"
+            res, module, f"Setting of NVMe NQN for host {module.params['name']}"
         )
     if module.params["iqn"]:
         res = get_with_context(
@@ -438,7 +438,7 @@ def _set_host_initiators(module, array):
             host=HostPatch(iqns=module.params["iqn"]),
         )
         check_response(
-            res, module, f"Setting of iSCSI IQN failed for host {module.params['name']}"
+            res, module, f"Setting of iSCSI IQN for host {module.params['name']}"
         )
     if module.params["wwns"]:
         res = get_with_context(
@@ -450,7 +450,7 @@ def _set_host_initiators(module, array):
             host=HostPatch(wwns=module.params["wwns"]),
         )
         check_response(
-            res, module, f"Setting of FC WWNs failed for host {module.params['name']}"
+            res, module, f"Setting of FC WWNs for host {module.params['name']}"
         )
 
 
@@ -502,7 +502,7 @@ def _update_host_initiators(module, array, answer=False):
             "remove_nqns",
             desired,
             current_connectors.nqns or [],
-            f"Change of NVMe NQNs failed on host {module.params['name']}",
+            f"Change of NVMe NQNs on host {module.params['name']}",
         ):
             answer = True
     if module.params["iqn"]:
@@ -514,7 +514,7 @@ def _update_host_initiators(module, array, answer=False):
             "remove_iqns",
             desired,
             current_connectors.iqns or [],
-            f"Change of iSCSI IQNs failed on host {module.params['name']}",
+            f"Change of iSCSI IQNs on host {module.params['name']}",
         ):
             answer = True
     if module.params["wwns"]:
@@ -529,7 +529,7 @@ def _update_host_initiators(module, array, answer=False):
             "remove_wwns",
             desired,
             current_connectors.wwns or [],
-            f"Change of FC WWNs failed on host {module.params['name']}",
+            f"Change of FC WWNs on host {module.params['name']}",
         ):
             answer = True
     return answer
@@ -757,7 +757,7 @@ def _update_host_personality(module, array, answer=False):
                 names=[module.params["name"]],
                 host=HostPatch(personality=module.params["personality"]),
             )
-            check_response(res, module, "Update host personality failed")
+            check_response(res, module, "Update host personality")
     if hasattr(host, "personality"):
         if module.params["personality"] == "delete":
             answer = True
@@ -770,7 +770,7 @@ def _update_host_personality(module, array, answer=False):
                     names=[module.params["name"]],
                     host=HostPatch(personality=""),
                 )
-                check_response(res, module, "Host personality deletion failed")
+                check_response(res, module, "Host personality deletion")
         elif host.personality != module.params["personality"]:
             answer = True
             if not module.check_mode:
@@ -782,7 +782,7 @@ def _update_host_personality(module, array, answer=False):
                     names=[module.params["name"]],
                     host=HostPatch(personality=module.params["personality"]),
                 )
-                check_response(res, module, "Host personality change failed")
+                check_response(res, module, "Host personality change")
     return answer
 
 
@@ -806,7 +806,7 @@ def _update_preferred_array(module, array, answer=False):
             check_response(
                 res,
                 module,
-                f"Preferred array list creation failed for host {module.params['name']}",
+                f"Preferred array list creation for host {module.params['name']}",
             )
     elif preferred_array != []:
         if module.params["preferred_array"] == ["delete"]:
@@ -823,7 +823,7 @@ def _update_preferred_array(module, array, answer=False):
                 check_response(
                     res,
                     module,
-                    f"Preferred array list deletion failed for {module.params['name']}",
+                    f"Preferred array list deletion for {module.params['name']}",
                 )
         else:
             current_preferred_array_list = []
@@ -848,7 +848,7 @@ def _update_preferred_array(module, array, answer=False):
                     check_response(
                         res,
                         module,
-                        f"Preferred array list change failed for {module.params['name']}",
+                        f"Preferred array list change for {module.params['name']}",
                     )
     return answer
 
@@ -967,7 +967,7 @@ def make_multi_hosts(module, array):
         check_response(
             res,
             module,
-            f"Multi-Host {module.params['name']}#{module.params['suffix']} creation failed",
+            f"Multi-Host {module.params['name']}#{module.params['suffix']} creation",
         )
     module.exit_json(changed=changed)
 
@@ -984,7 +984,7 @@ def make_host(module, array):
             names=[module.params["name"]],
             host=HostPost(),
         )
-        check_response(res, module, f"Host {module.params['name']} creation failed")
+        check_response(res, module, f"Host {module.params['name']} creation")
         if module.params["vlan"]:
             _set_vlan(module, array)
         _set_host_initiators(module, array)
@@ -1014,7 +1014,7 @@ def make_host(module, array):
                     host_names=[module.params["name"]],
                     volume_names=[module.params["volume"]],
                 )
-            check_response(res, module, "Volume connection failed")
+            check_response(res, module, "Volume connection")
     module.exit_json(changed=changed)
 
 
@@ -1045,7 +1045,7 @@ def update_host(module, array):
                     check_response(
                         res,
                         module,
-                        f"Rename host {module.params['name']} to {module.params['rename']} failed",
+                        f"Rename host {module.params['name']} to {module.params['rename']}",
                     )
                     module.params["name"] = module.params["rename"]
                     renamed = True
@@ -1124,7 +1124,7 @@ def delete_host(module, array):
             check_response(
                 res,
                 module,
-                f"Host {module.params['name']} failed to remove from hostgroup",
+                f"Removing host {module.params['name']} from hostgroup",
             )
         volumes = list(
             get_with_context(
@@ -1145,9 +1145,7 @@ def delete_host(module, array):
                 host_names=[module.params["name"]],
                 volume_names=current_vols,
             )
-            check_response(
-                res, module, f"Host {module.params['name']} volume detach failed"
-            )
+            check_response(res, module, f"Host {module.params['name']} volume detach")
         res = get_with_context(
             array,
             "delete_hosts",
@@ -1155,7 +1153,7 @@ def delete_host(module, array):
             module,
             names=[module.params["name"]],
         )
-        check_response(res, module, f"Host {module.params['name']} deletion failed")
+        check_response(res, module, f"Host {module.params['name']} deletion")
     module.exit_json(changed=changed)
 
 

@@ -88,7 +88,7 @@ def delete_window(module, array):
         changed = True
         if not module.check_mode:
             res = array.delete_maintenance_windows(names=["environment"])
-            check_response(res, module, "Deleting maintenance window failed")
+            check_response(res, module, "Deleting maintenance window")
     module.exit_json(changed=changed)
 
 
@@ -108,7 +108,7 @@ def set_window(module, array):
             res = array.post_maintenance_windows(
                 names=["environment"], maintenance_window=window
             )
-            check_response(res, module, "Setting maintenance window failed")
+            check_response(res, module, "Setting maintenance window")
     module.exit_json(changed=changed)
 
 

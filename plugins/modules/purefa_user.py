@@ -282,15 +282,13 @@ def set_access_policy(module, array, user, policy):
                 ]
             ),
         )
-        check_response(res, module, f"Adding {name} to access policy {policy} failed")
+        check_response(res, module, f"Adding {name} to access policy {policy}")
     for old in current:
         if old != policy:
             res = array.delete_policies_management_access_members(
                 policy_names=[old], member_names=[name], member_types=["admins"]
             )
-            check_response(
-                res, module, f"Removing {name} from access policy {old} failed"
-            )
+            check_response(res, module, f"Removing {name} from access policy {old}")
 
 
 def create_local_user(module, array, user):
@@ -357,7 +355,7 @@ def create_local_user(module, array, user):
                 check_response(
                     res,
                     module,
-                    f"Local User {module.params['name']} password reset failed. Check old password",
+                    f"Local User {module.params['name']} password reset (check the old password)",
                 )
         if module.params["api"]:
             api_changed = True
@@ -394,7 +392,7 @@ def create_local_user(module, array, user):
                         check_response(
                             res,
                             module,
-                            f"Local User {module.params['name']} role change failed",
+                            f"Local User {module.params['name']} role change",
                         )
             else:
                 module.warn("Role for 'pureuser' cannot be modified.")
@@ -469,9 +467,7 @@ def delete_local_user(module, array):
     changed = True
     if not module.check_mode:
         res = array.delete_admins(names=[module.params["name"]])
-        check_response(
-            res, module, f"User Account {module.params['name']} deletion failed"
-        )
+        check_response(res, module, f"User Account {module.params['name']} deletion")
     module.exit_json(changed=changed)
 
 
@@ -484,7 +480,7 @@ def delete_ad_user(module, array, user):
             check_response(
                 res,
                 module,
-                f"AD Account {module.params['name']} API token deletion failed",
+                f"AD Account {module.params['name']} API token deletion",
             )
         if hasattr(user, "public_key"):
             res = array.patch_admins(
@@ -494,7 +490,7 @@ def delete_ad_user(module, array, user):
             check_response(
                 res,
                 module,
-                f"AD Account {module.params['name']} public key deletion failed",
+                f"AD Account {module.params['name']} public key deletion",
             )
     module.exit_json(changed=changed)
 

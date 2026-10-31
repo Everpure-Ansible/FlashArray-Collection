@@ -140,9 +140,7 @@ def disable_vnc(module, array, app):
             res = array.patch_apps(
                 names=[module.params["name"]], app=App(vnc_enabled=False)
             )
-            check_response(
-                res, module, f"Disabling VNC for {module.params['name']} failed"
-            )
+            check_response(res, module, f"Disabling VNC for {module.params['name']}")
     module.exit_json(changed=changed)
 
 

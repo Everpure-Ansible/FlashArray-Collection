@@ -635,7 +635,9 @@ def delete_schedule(module, array):
         names=[module.params["name"]],
     )
     schedule = list(res.items)[0]
-    reset_failed = f"Resetting pgroup {module.params['name']} {module.params['schedule']} schedule failed"
+    reset_failed = (
+        f"Resetting pgroup {module.params['name']} {module.params['schedule']} schedule"
+    )
 
     if module.params["schedule"] == "replication":
         if schedule.replication_schedule.enabled:
@@ -687,7 +689,7 @@ def delete_schedule(module, array):
                 check_response(
                     res,
                     module,
-                    f"Deleting pgroup {module.params['name']} {module.params['schedule']} schedule failed",
+                    f"Deleting pgroup {module.params['name']} {module.params['schedule']} schedule",
                 )
     else:
         if schedule.snapshot_schedule.enabled:
@@ -724,7 +726,7 @@ def delete_schedule(module, array):
                 check_response(
                     res,
                     module,
-                    f"Deleting pgroup {module.params['name']} {module.params['schedule']} schedule failed",
+                    f"Deleting pgroup {module.params['name']} {module.params['schedule']} schedule",
                 )
     module.exit_json(changed=changed)
 
