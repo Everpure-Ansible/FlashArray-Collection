@@ -69,6 +69,8 @@ def _real(name, *roots):
 
 
 def _load_sdk():
+    # Any failure here is a reason to skip these tests, never to break the
+    # collection of the whole suite.
     try:
         with _real("pypureclient.flasharray", "pypureclient") as flasharray:
             version = sys.modules["pypureclient"].__version__
@@ -80,21 +82,26 @@ def _load_sdk():
                     "PresetWorkloadPost",
                 )
             }
-    except ImportError:
-        return None
-    return version, models
+    except Exception as err:  # pylint: disable=broad-except
+        return None, "py-pure-client is not usable here: %s" % err
+    return (version, models), None
 
 
 def _load_validator():
+    # Ansible's collection finder (installed when pytest-ansible is loaded)
+    # must not see the ansible_collections mocks either, or it fails to
+    # locate ansible.builtin while the real package is imported.
     try:
-        with _real("ansible.module_utils.common.arg_spec", "ansible") as arg_spec:
-            return arg_spec.ArgumentSpecValidator
-    except ImportError:
-        return None
+        with _real(
+            "ansible.module_utils.common.arg_spec", "ansible", "ansible_collections"
+        ) as arg_spec:
+            return arg_spec.ArgumentSpecValidator, None
+    except Exception as err:  # pylint: disable=broad-except
+        return None, "ansible-core is not usable here: %s" % err
 
 
-SDK = _load_sdk()
-VALIDATOR = _load_validator()
+SDK, SDK_SKIP = _load_sdk()
+VALIDATOR, VALIDATOR_SKIP = _load_validator()
 
 
 def _version_tuple(text):
@@ -105,7 +112,7 @@ def _version_tuple(text):
 def sdk():
     """The three real model classes, or a skip"""
     if SDK is None:
-        pytest.skip("py-pure-client is not installed")
+        pytest.skip(SDK_SKIP)
     version, models = SDK
     floor = preset_module.MIN_SDK_VERSION
     if _version_tuple(version) < _version_tuple(floor):
@@ -117,7 +124,7 @@ def sdk():
 def validator():
     """The real ArgumentSpecValidator built from the module's own argument_spec"""
     if VALIDATOR is None:
-        pytest.skip("ansible-core is not installed")
+        pytest.skip(VALIDATOR_SKIP)
     run = _run_main(_minimal_params())
     spec = copy.deepcopy(run.argument_spec)
     # The shared connection options come from the (mocked) module_utils
