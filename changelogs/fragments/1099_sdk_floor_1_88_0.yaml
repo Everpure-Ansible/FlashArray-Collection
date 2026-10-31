@@ -1,0 +1,2 @@
+minor_changes:
+  - all - the minimum ``py-pure-client`` version is raised from 1.82.0 to 1.88.0, the first release that carries the REST 2.54 models needed by the new ``purefa_preset`` module.

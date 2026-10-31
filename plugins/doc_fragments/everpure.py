@@ -92,7 +92,7 @@ notes:
 requirements:
   - python >= 3.3
   - purestorage >= 1.19
-  - py-pure-client >= 1.90.0
+  - py-pure-client >= 1.88.0
   - netaddr
   - requests
   - pycountry
