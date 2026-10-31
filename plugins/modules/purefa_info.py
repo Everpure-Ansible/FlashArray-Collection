@@ -517,13 +517,17 @@ def generate_config_dict(module, array):
     config_info["dns"] = {}
     dns_configs = list(array.get_dns().items)
     for config in dns_configs:
-        config_info["dns"][config.services[0]] = {
+        # Keyed by service for the configurations that have one, and by name
+        # for the ones created for file servers, which have no service
+        services = list(getattr(config, "services", None) or [])
+        key = services[0] if services else config.name
+        config_info["dns"][key] = {
+            "name": config.name,
+            "services": services,
             "nameservers": config.nameservers,
             "domain": config.domain,
+            "source": getattr(config.source, "name", None),
         }
-        config_info["dns"][config.services[0]]["source"] = getattr(
-            config.source, "name", None
-        )
     if LooseVersion(SAML2_VERSION) <= LooseVersion(api_version):
         config_info["saml2sso"] = _saml2sso_dict(list(array.get_sso_saml2_idps().items))
     config_info["active_directory"] = {}

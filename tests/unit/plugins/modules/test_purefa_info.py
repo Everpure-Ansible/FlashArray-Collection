@@ -2022,7 +2022,16 @@ class TestGenerateConfigDict:
         mock_dns.nameservers = ["8.8.8.8"]
         mock_dns.domain = "example.com"
         mock_dns.source = Mock(name="ct0.eth0")
-        mock_array.get_dns.return_value = Mock(items=[mock_dns])
+        mock_dns.name = "management"
+        # A configuration created for a file server has no service at all
+        mock_dns_nosvc = Mock()
+        mock_dns_nosvc.name = "filesvr2-dns"
+        mock_dns_nosvc.services = []
+        mock_dns_nosvc.nameservers = ["10.0.0.53"]
+        mock_dns_nosvc.domain = "lab.example.com"
+        mock_dns_nosvc.source = Mock()
+        mock_dns_nosvc.source.name = "vir0"
+        mock_array.get_dns.return_value = Mock(items=[mock_dns, mock_dns_nosvc])
 
         # Mock SAML2 (not available in older versions)
         mock_array.get_sso_saml2_idps.return_value = Mock(items=[])
@@ -2071,6 +2080,15 @@ class TestGenerateConfigDict:
         ]
         assert result["alert_watchers"] == result["smtp"]
         assert "snmp" in result
+        # Keyed by service when there is one, by name when there is not
+        assert result["dns"]["management"]["name"] == "management"
+        assert result["dns"]["filesvr2-dns"] == {
+            "name": "filesvr2-dns",
+            "services": [],
+            "nameservers": ["10.0.0.53"],
+            "domain": "lab.example.com",
+            "source": "vir0",
+        }
 
 
 class TestGenerateFilesystemsDict:
