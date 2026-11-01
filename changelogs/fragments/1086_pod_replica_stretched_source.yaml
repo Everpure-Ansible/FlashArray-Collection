@@ -1,6 +1,0 @@
-bugfixes:
-  - purefa_pod_replica - allow an ActiveCluster stretched pod to be the source
-    of a new replica link on Purity//FA 6.10.5 and later (multi-site continuous
-    replication). Earlier Purity versions get a clear error naming the minimum
-    version, and pausing, resuming or deleting an existing replica link on a
-    stretched pod no longer fails.

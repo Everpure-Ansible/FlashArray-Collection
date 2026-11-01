@@ -1,8 +1,0 @@
-bugfixes:
-  - purefa_realm - ``rename_realm()`` called the nonexistent SDK method
-    ``patch_realm()``, so renaming a realm always failed with
-    ``AttributeError``. It now calls ``patch_realms()``.
-  - purefa_snap - ``recover_snapshot()`` called the nonexistent SDK method
-    ``patch_volume_snapshot()``, so recovering a destroyed-but-not-eradicated
-    snapshot always failed with ``AttributeError``. It now calls
-    ``patch_volume_snapshots()``.

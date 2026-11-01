@@ -1,5 +1,0 @@
-bugfixes:
-  - purefa_hardware - the identify LED request was built with the ``Hardware``
-    response model, which serialises to an empty body, so the array answered
-    400 "No operation was specified" and the LED never changed. The request is
-    now built with ``HardwarePatch``.

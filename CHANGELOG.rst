@@ -4,6 +4,129 @@ Everpure.Flasharray Release Notes
 
 .. contents:: Topics
 
+v1.46.0
+=======
+
+Minor Changes
+-------------
+
+- CI - The artifact job now fails on any symlink in the build, on unreleased fragments or test directories being shipped, and when CHANGELOG.rst has no section for the version in galaxy.yml. It also runs ansible-lint against the artifact, not only ansible-test sanity.
+- README - Converted the badge block from unbalanced raw HTML to markdown image links, and reconciled the Available Modules list against the collection - it listed 73 of 75 modules, misspelled purefa_audits, and omitted purefa_dsrole_old and purefa_kmip.
+- all - the minimum ``py-pure-client`` version is raised from 1.82.0 to 1.88.0, the first release that carries the REST 2.54 models needed by the new ``purefa_preset`` module. The ``everpure.fa`` documentation fragment, which had said 1.90.0 since the 1.44.0 rebrand without anything needing it, now gives the same 1.88.0 as ``requirements.txt`` and the README.
+- collection - Narrowed the changelogs exclusion so that changelogs/changelog.yaml still ships alongside the rendered CHANGELOG.rst while antsibull-changelog tooling state, its configuration, and unreleased fragments do not.
+- collection - Removed the playbooks/roles symlink and stopped shipping the empty scaffolding directories. A symlink is recorded in FILES.json as an ordinary directory with a null checksum, so nothing behind it is verified, and content scanners routinely skip symlinks.
+- collection - tests/README.md no longer ships. It documents the tests/unit directory, which is excluded from the build, so none of the paths it describes exist in the collection.
+- purefa_apiclient - ``token_ttl`` is documented as seconds (1-86400), converted to milliseconds for the array; ``86400`` is applied only when creating a client, so an unset ``token_ttl`` is not compared against an existing client.
+- purefa_audits - the ``purefa_audits`` return value is documented; a dictionary keyed by audit record name with ``time``, ``arguments``, ``user``, ``command``, ``subcommand`` and ``origin`` for each event.
+- purefa_dns - the ``service`` option no longer defaults to ``management``. Omitting it creates a DNS configuration with no service, which is what every file server after the first uses through the ``dns`` option of ``purefa_server``. A play that gave a custom ``name`` without ``service`` used to have the name rewritten to ``management``; it now creates a configuration with that name, so add ``service=management`` or use the ``management`` name directly where the management DNS was meant. The limit of two configurations is removed; the array itself enforces one configuration per service.
+- purefa_eradication, purefa_host, purefa_policy, purefa_sessions, purefa_network_access_policy - document array rules learnt on hardware (disabled_delay cannot be decreased, Pure OUI WWNs are refused, SMB rules share access and encryption settings, unenforced quota limits, sessions without a start time, positional rule names).
+- purefa_hardware - ``enabled`` is now required; an unknown component fails with a clear message.
+- purefa_info - Add servers gather_subset to report file server configuration
+- purefa_info - Network-access policies in the ``policies`` subset now report their real rules. The ``rules`` field was previously hardcoded to an empty list for every policy of this type, even when the policy had real rules configured.
+- purefa_info - QoS policies in the ``policies`` subset now report ``max_total_bytes_per_sec``, ``max_total_ops_per_sec``, ``pod``, and (REST 2.55+) ``realms``.
+- purefa_info - TLS policies in the ``policies`` subset now report ``appliance_certificate``, ``client_certificates_required``, ``disabled_tls_ciphers``, ``enabled_tls_ciphers``, ``min_tls_version``, ``tls_enforced_for``, ``trusted_client_certificate_authority``, and ``verify_client_certificate_trust``.
+- purefa_info - report ``attached_server`` for each Ethernet interface in the ``network`` subset, naming the file server the interface serves data for.
+- purefa_info - report the login banner as ``default.banner``, alert watchers as ``config.alert_watchers``, directory exports, every SAML identity provider under ``config.saml2sso`` keyed by name, management-access policy rules and aggregation strategy, and extra password and SMB policy fields.
+- purefa_info - the ``dns`` section of the ``config`` subset reports ``name`` and ``services`` for each configuration, and lists a configuration with no service under its name.
+- purefa_network - add ``server`` option to attach an Ethernet interface to a file server when it is created, rather than having to move it afterwards with ``purefa_server``. Omitting the option keeps the existing behaviour, in which the array attaches a new interface to its default ``_array_server``. Set it to an empty string to attach an interface to no file server at all. Requires Purity//FA REST API 2.44 or higher.
+- purefa_network - virtual interface names containing hyphens are rejected before the array is called.
+- purefa_pg - a replication target can be removed with ``state absent`` and ``target``.
+- purefa_pg, purefa_pgsched, purefa_vg, purefa_eradication, purefa_policy_management_access - ``enabled``, ``priority_operator``/``priority_value``, the eradication delays and ``enabled``/``aggregation_strategy`` are only applied when supplied instead of being reset to an implicit default on every update.
+- purefa_policy_management_access - rule roles are validated against the four the array accepts (viewer, support, admin, storage).
+- purefa_snap - add ``with_default_protection`` for volumes created by a snapshot copy.
+- purefa_user - a new user still gets ``readonly`` when neither ``role`` nor ``access_policy`` is set, but an existing user's role or policy is now only changed when one of them is given. Before, omitting ``role`` reset an existing user to ``readonly``.
+- purefa_user - add ``access_policy`` to make a local user a member of a custom management access policy instead of giving it a built-in ``role`` (requires REST 2.36). The user is then limited to what the policy grants, for example a user scoped to one realm for Portworx/PX-CSI secure multi-tenancy. ``role`` and ``access_policy`` are mutually exclusive.
+- purefa_volume - the documentation shows that a volume in a pod that lives in a realm is addressed as ``REALM_NAME::POD_NAME::VOLUME_NAME``.
+
+Bugfixes
+--------
+
+- purefa_ad, purefa_offload - version checks use comparisons instead of substring tests; purefa_offload azure account handling.
+- purefa_admin - ``lockout 0`` clears the lockout and ``sso false`` disables single sign-on.
+- purefa_apiclient - a run whose ``public_key``, ``issuer``, ``role`` or ``token_ttl`` differ from an existing API client warns instead of silently reporting ok; the array only allows ``enabled`` to be changed in place, so the client must be deleted and recreated to apply them.
+- purefa_audits - an audit record that does not carry every field (for example ``arguments``, ``subcommand`` or ``origin``) no longer raises ``AttributeError``; the missing field is returned as ``none``.
+- purefa_audits - the ``start`` and ``timezone`` option descriptions are corrected; ``timezone`` is the zone in which ``start`` is interpreted and the returned times are reported, and the array's own timezone is only read when ``timezone`` is omitted.
+- purefa_cbsexpand, purefa_certs, purefa_connect, purefa_console, purefa_dns, purefa_ds, purefa_dsrole, purefa_dsrole_old, purefa_endpoint, purefa_eula, purefa_fleet, purefa_fs, purefa_hg, purefa_host, purefa_kmip, purefa_maintenance, purefa_ntp, purefa_pg, purefa_pgsched, purefa_pgsnap, purefa_phonehome, purefa_pod, purefa_proxy, purefa_ra, purefa_realm, purefa_smtp, purefa_snmp, purefa_syslog, purefa_syslog_settings, purefa_tgroup, purefa_user, purefa_vg, purefa_vnc, purefa_volume, purefa_workload - array error messages no longer double the word ``failed`` (for example ``Delete pod x failed failed.``).
+- purefa_certs - ``generate true`` regenerates the key and ``days`` is applied.
+- purefa_connect - an existing connection is matched by address and type, the fleet-management connection is never touched, and ``encrypted`` uses the correct version check.
+- purefa_default_protection - pod-scope add and remove send the correct body.
+- purefa_dirsnap - ``keep_for`` is compared before it is patched; recovery no longer sends a null retention.
+- purefa_dns - deleting a configuration name that does not exist is no longer redirected to the management configuration, which emptied the management DNS.
+- purefa_dns - emptying the management configuration now honours check mode.
+- purefa_dns - update the management configuration when it carries several services, add a source to a configuration without one, only send ``source`` when given, and never redirect ``state absent`` of an unknown name to the management configuration.
+- purefa_dns - updating a configuration failed with "Changing service type is not permitted" when it carried more than one service, as the management configuration does on arrays where it also serves files.
+- purefa_ds, purefa_dsrole - a repeated ``state absent`` is a no-op when the array returns empty values.
+- purefa_endpoint - destroy and eradicate are idempotent and reachable; a rename repeat no longer re-creates the endpoint.
+- purefa_eradication - ``enabled_delay`` and ``disabled_delay`` no longer default to 1 day. A delay that is not given keeps the array's current value and a call with neither is a no-op; previously changing one delay silently reset the other to one day. ``timer`` now sets both delays when the array no longer reports ``eradication_delay`` because they differ.
+- purefa_fleet - member removal no longer raises; delete honours check mode.
+- purefa_fs - moving a file system between pods reads the source pod.
+- purefa_hardware - the identify LED request was built with the ``Hardware`` response model, which serialises to an empty body, so the array answered 400 "No operation was specified" and the LED never changed. The request is now built with ``HardwarePatch``.
+- purefa_hardware - wait for the identify LED state to settle after a change so an immediate repeat is a no-op.
+- purefa_hg - a repeated rename is a no-op; deleting an empty host group reports a change; ``lun`` without ``volume`` fails cleanly.
+- purefa_hg - deleting a host group with more than one member host and connected volumes no longer fails with ``Unidentified internal error``; each volume is disconnected once instead of once per host.
+- purefa_host - ``preferred_array`` error message, ``count`` with ``state absent`` fails clearly, CHAP clearing is idempotent.
+- purefa_info - A protection group snapshot with no transfer record is now reported. Only a replicated snapshot has one, so a protection group with no replication target previously reported no snapshots at all.
+- purefa_info - Fixed ``created`` and ``time_remaining`` being ``null`` for every protection group snapshot reported under the ``pgroups`` and ``deleted_pgroups`` subsets. Both were hardcoded to ``None`` when the module moved to REST 2 in 1.37.0, because they are fields of the snapshot and the module only read the snapshot's transfer record, which carries neither at any REST version.
+- purefa_info - ``destroyed`` is no longer read from a protection group snapshot transfer record without a default, which would raise ``AttributeError`` on a record that omits it.
+- purefa_info - ``gather_subset all`` no longer crashes in the host-group performance dict or drops the ``default`` section; performance keys read the attribute of the same name; replica links report ``recovery_point``.
+- purefa_info - offload-target snapshots of pod and realm volumes are keyed by their full ``pod::vol.suffix`` or ``realm::pod::vol.suffix`` name in the ``snapshots`` and ``deleted_snapshots`` sections, and their transfer details are looked up by name rather than by the snapshot object.
+- purefa_info - the ``config`` subset failed with an IndexError when the array had a DNS configuration with no service.
+- purefa_info - the ``fleet``, ``presets`` and ``workloads`` sections are empty instead of a traceback when the array does not support Fusion or the read does not succeed.
+- purefa_info - the ``presets`` and ``workloads`` subsets are gathered from REST 2.40, where py-pure-client provides the calls, instead of failing with ``AttributeError`` on REST 2.38 and 2.39 arrays; ``fleet`` is still gathered from REST 2.38.
+- purefa_inventory - ports missing from the hardware listing no longer raise.
+- purefa_kmip - the CA certificate length is validated instead of the name.
+- purefa_logging, purefa_ra, purefa_snmp, purefa_alert, purefa_syslog, purefa_ntp, purefa_kmip, purefa_saml, purefa_cbsexpand - read-only listings and ``state test`` report ``changed false`` and tolerate sparse test results and error responses.
+- purefa_messages, purefa_audits, purefa_sessions - malformed ``history``, ``start`` and ``end`` values fail cleanly instead of raising.
+- purefa_network - ``state absent`` of a missing interface is a no-op; interfaces without a gateway are patched with only the changed fields.
+- purefa_network - newer Purity releases store a virtual interface that is attached to a file server under a name prefixed with the server's name, and refuse a lookup by the bare name. The interface is now found by either the bare name or the prefixed name the array reports, and every update, delete and post-create setting is sent to the name the array stores.
+- purefa_network - stop asking the array for a subnet named ``None`` on every interface creation that does not specify ``subnet``.
+- purefa_network - the ``servicelist`` option was silently ignored on the run that created an interface, and only took effect on a subsequent run. The service list is now sent with the create itself.
+- purefa_network_access_policy - look rules up by name only (the array rejects names together with policy_names) and verify the owning policy, so a repeated rule delete is a no-op.
+- purefa_ntp - ``state test`` no longer fails on a non-fleet call and ``state present`` without a list applies the documented default server.
+- purefa_pg - ``state absent`` on a protection group whose pod no longer exists reports no change instead of failing with ``Pod ... does not exist``.
+- purefa_pg - a protection group in a pod inside a realm (``realm::pod::pg``) can be renamed; the module looked up and patched ``realm::new-name`` instead of ``realm::pod::new-name``.
+- purefa_pg - members are added and removed idempotently and targets are only posted when missing.
+- purefa_pgsched - ``snap_at``, ``replicate_at`` and blackout windows are sent in seconds since midnight as the array stores them, and ``enabled`` is patched in its own request because the array ignores a frequency or time sent with it; delete uses scaled frequencies.
+- purefa_pgsnap - ``add_to_pgs`` is passed as protection group names (the SDK crashed on references without ids); check mode returns the suffix; plain copies honour ``with_default_protection``.
+- purefa_pgsnap - ``state absent`` on a snapshot whose protection group no longer exists reports no change instead of failing; the failure is kept for every other state and for offloaded snapshots, which can outlive the source group.
+- purefa_pgsnap - the RETURN documentation describes the ``suffix`` key the module returns, not a ``snapshot`` key that was never returned.
+- purefa_phonehome, purefa_maintenance, purefa_snmp_agent, purefa_snmp - repeated runs no longer report a change.
+- purefa_pod - ``quota`` given as a plain number of bytes is applied as documented; it was silently ignored on create and update.
+- purefa_pod - quota can be cleared, ``default_protection_pg []`` clears the list, ``state absent`` on a destroyed pod no longer raises, failover preferences compare by name.
+- purefa_pod_replica - allow an ActiveCluster stretched pod to be the source of a new replica link on Purity//FA 6.10.5 and later (multi-site continuous replication). Earlier Purity versions get a clear error naming the minimum version, and pausing, resuming or deleting an existing replica link on a stretched pod no longer fails.
+- purefa_policy - the first NFS rule of a policy is created with every field, nfs, smb and snapshot rules are modified in place, autodir policies rename, ``user_mapping false`` is applied, anonuid/anongid use version comparisons, ``quota_enforced`` lands in the right field, ``password_history 0`` clears.
+- purefa_policy_management_access - rename is idempotent.
+- purefa_realm - QoS can be cleared with ``0``; a repeated rename is a no-op; error messages name the right option.
+- purefa_realm - ``quota`` given as a plain number of bytes is accepted as documented instead of being converted to 0, which failed realm creation with a misleading minimum-size error and could set a zero quota on update.
+- purefa_realm - ``rename_realm()`` called the nonexistent SDK method ``patch_realm()``, so renaming a realm always failed with ``AttributeError``. It now calls ``patch_realms()``.
+- purefa_saml - credentials are omitted when not given.
+- purefa_server - ``network_interfaces`` compares a requested bare interface name with the server-prefixed name a newer array reports, so a server whose interfaces are already attached no longer reports a change, and an interface stored under another server's name is attached and detached by its stored name.
+- purefa_smtp - ``sender``, ``subject_prefix``, ``body_prefix`` and ``user`` can be cleared and ``state absent`` clears the relay host with a null instead of the string "None".
+- purefa_snap - ``recover_snapshot()`` called the nonexistent SDK method ``patch_volume_snapshot()``, so recovering a destroyed-but-not-eradicated snapshot always failed with ``AttributeError``. It now calls ``patch_volume_snapshots()``.
+- purefa_snap - a repeated create with the same suffix is a no-op; overwrite copies are checked; offload recovery names are built correctly.
+- purefa_syslog_settings - a CA certificate can be added when none exists.
+- purefa_tgroup - the array's error detail is reported; a repeated rename is a no-op.
+- purefa_timeout - values between 1 and 4 minutes are rejected as documented.
+- purefa_token - an existing token is detected without creating one; creation reports a change; ``timeout`` is honoured on REST 2.
+- purefa_user - API tokens are only deleted when one exists; a password change no longer skips role, token and key handling.
+- purefa_user - setting ``role`` on a local user whose access comes from a custom management access policy failed with ``User is not a role user``. The user is now moved to the built-in policy of that role.
+- purefa_vg - a repeated rename no longer re-creates the old group; ``count`` without ``suffix``.
+- purefa_vnc - app names are validated before the deprecation exit; the ``vnc`` return value is always a dictionary.
+- purefa_volume - a repeated rename is a no-op, QoS can be cleared with ``0``, a bare ``state present`` no longer falls into the copy path, ``add_to_pgs`` on pod volumes, moving a volume out of a pod.
+- purefa_volume - accept a volume snapshot as the copy source when ``target`` is set, including a protection group snapshot inside a pod such as ``pod::pgroup.suffix.volume``. The module previously treated the snapshot name as a new volume and failed with ``Size must be specified``.
+- purefa_volume, purefa_vg, purefa_policy - a unit-less ``size``, ``bw_qos`` or ``quota_limit`` value is treated as bytes instead of 0; a plain-number ``bw_qos`` on an existing volume silently removed the bandwidth limit, a plain-number volume ``size`` was ignored on update, and vgroup and quota-policy values were sent to the array as 0.
+- purefa_volume_tags - a ``kvp`` value containing a colon (a URL with a port, a timestamp) was truncated at its second colon when tags were created, compared or removed. Only the first colon now separates key from value.
+- purefa_volume_tags - a copyable-only change of an existing tag is applied.
+
+New Modules
+-----------
+
+- everpure.flasharray.purefa_metrics - Collect OpenMetrics data from a Everpure FlashArray
+- everpure.flasharray.purefa_network_access_policy - Manage FlashArray Network Access Policies
+- everpure.flasharray.purefa_preset - Manage Fusion fleet block workload presets
+- everpure.flasharray.purefa_qos_policy - Manage Everpure FlashArray QoS policies
+- everpure.flasharray.purefa_tls_policy - Manage Everpure FlashArray TLS policies
+
 v1.45.1
 =======
 

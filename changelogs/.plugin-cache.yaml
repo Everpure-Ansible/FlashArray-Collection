@@ -196,11 +196,21 @@ plugins:
       name: purefa_messages
       namespace: ''
       version_added: 1.14.0
+    purefa_metrics:
+      description: Collect OpenMetrics data from a Everpure FlashArray
+      name: purefa_metrics
+      namespace: ''
+      version_added: 1.46.0
     purefa_network:
       description: Manage network interfaces in a Everpure FlashArray
       name: purefa_network
       namespace: ''
       version_added: 1.0.0
+    purefa_network_access_policy:
+      description: Manage FlashArray Network Access Policies
+      name: purefa_network_access_policy
+      namespace: ''
+      version_added: 1.46.0
     purefa_ntp:
       description: Configure Everpure FlashArray NTP settings
       name: purefa_ntp
@@ -251,11 +261,21 @@ plugins:
       name: purefa_policy_management_access
       namespace: ''
       version_added: 1.44.0
+    purefa_preset:
+      description: Manage Fusion fleet block workload presets
+      name: purefa_preset
+      namespace: ''
+      version_added: 1.46.0
     purefa_proxy:
       description: Configure FlashArray phonehome HTTPs proxy settings
       name: purefa_proxy
       namespace: ''
       version_added: 1.0.0
+    purefa_qos_policy:
+      description: Manage Everpure FlashArray QoS policies
+      name: purefa_qos_policy
+      namespace: ''
+      version_added: 1.46.0
     purefa_ra:
       description: Enable or Disable Everpure FlashArray Remote Assist
       name: purefa_ra
@@ -341,6 +361,11 @@ plugins:
       name: purefa_timeout
       namespace: ''
       version_added: 1.0.0
+    purefa_tls_policy:
+      description: Manage Everpure FlashArray TLS policies
+      name: purefa_tls_policy
+      namespace: ''
+      version_added: 1.46.0
     purefa_token:
       description: Create or delete an API token for an existing admin user
       name: purefa_token
@@ -391,4 +416,4 @@ plugins:
   strategy: {}
   test: {}
   vars: {}
-version: 1.45.1
+version: 1.46.0
