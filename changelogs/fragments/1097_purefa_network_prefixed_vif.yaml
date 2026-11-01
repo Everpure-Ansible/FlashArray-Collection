@@ -1,3 +1,0 @@
-bugfixes:
-  - purefa_network - newer Purity releases store a virtual interface that is attached to a file server under a name prefixed with the server's name, and refuse a lookup by the bare name. The interface is now found by either the bare name or the prefixed name the array reports, and every update, delete and post-create setting is sent to the name the array stores.
-  - purefa_server - ``network_interfaces`` compares a requested bare interface name with the server-prefixed name a newer array reports, so a server whose interfaces are already attached no longer reports a change, and an interface stored under another server's name is attached and detached by its stored name.

@@ -1,4 +1,0 @@
-bugfixes:
-  - purefa_volume_tags - a ``kvp`` value containing a colon (a URL with a port,
-    a timestamp) was truncated at its second colon when tags were created,
-    compared or removed. Only the first colon now separates key from value.

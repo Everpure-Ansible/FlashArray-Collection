@@ -1,6 +1,0 @@
-bugfixes:
-  - purefa_eradication - ``enabled_delay`` and ``disabled_delay`` no longer
-    default to 1 day. A delay that is not given keeps the array's current
-    value and a call with neither is a no-op; previously changing one delay
-    silently reset the other to one day. ``timer`` now sets both delays when
-    the array no longer reports ``eradication_delay`` because they differ.

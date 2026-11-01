@@ -1,6 +1,6 @@
 namespace: everpure
 name: flasharray
-version: 1.45.1
+version: 1.46.0
 readme: README.md
 authors:
   - Everpure Ansible Team <pure-ansible-team@everpuredata.com>
