@@ -1031,6 +1031,16 @@ class TestDeleteSnapshotOffload:
         delete_snapshot(mock_module, mock_array)
 
         mock_array.patch_remote_volume_snapshots.assert_called_once()
+        patch_kwargs = mock_array.patch_remote_volume_snapshots.call_args[1]
+        assert patch_kwargs["names"] == ["local-array:vol1.snap1"]
+        assert patch_kwargs["on"] == "nfs-target"
+        assert patch_kwargs["replication_snapshot"] is False
+        # the body of a remote snapshot PATCH is remote_volume_snapshot
+        assert (
+            patch_kwargs["remote_volume_snapshot"]
+            is _snap_module.DestroyedPatchPost.return_value
+        )
+        assert "volume_snapshot" not in patch_kwargs
         mock_array.delete_remote_volume_snapshots.assert_called_once()
         mock_module.exit_json.assert_called_once_with(changed=True)
 

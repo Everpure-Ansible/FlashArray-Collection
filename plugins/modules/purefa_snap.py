@@ -571,7 +571,7 @@ def delete_snapshot(module, array):
                 module,
                 names=[full_snapname],
                 on=module.params["offload"],
-                volume_snapshot=VolumeSnapshotPatch(destroyed=True),
+                remote_volume_snapshot=DestroyedPatchPost(destroyed=True),
                 replication_snapshot=module.params["ignore_repl"],
             )
             check_response(res, module, f"Failed to delete remote snapshot {snapname}")
