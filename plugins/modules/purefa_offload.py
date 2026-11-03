@@ -22,6 +22,8 @@ short_description: Create, modify and delete NFS, S3 or Azure offload targets
 description:
 - Create, modify and delete NFS, S3, Azure or GCP offload targets.
 - You must have a correctly configured offload app installed and a correctly configured offload network for offload to work.
+- Purity//FA 6.2.3 and higher support up to two offload targets per array, provided both are S3 or both are Azure targets.
+  Earlier releases support a single offload target.
 author:
 - Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
 options:
@@ -197,6 +199,10 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
 
 REGEX_TARGET_NAME = re.compile(r"^[a-zA-Z0-9\-]*$")
 MULTIOFFLOAD_LIMIT = 1
+# Purity//FA 6.2.3 (REST 2.11) and higher allow two cloud offload targets
+# of the same type (two S3 buckets or two Azure containers) per array
+MULTIOFFLOAD_LIMIT_SAME_TYPE = 2
+MULTIOFFLOAD_API_VERSION = "2.11"
 PROFILE_API_VERSION = "2.25"
 NO_SNAP2NFS_VERSION = "2.27"
 CONTEXT_VERSION = "2.38"
@@ -479,11 +485,16 @@ def main():
     target = get_target(module, array)
     if module.params["state"] == "present" and not target:
         offloads = list(array.get_offloads().items)
-        if len(offloads) >= MULTIOFFLOAD_LIMIT:
+        offload_limit = MULTIOFFLOAD_LIMIT
+        if LooseVersion(MULTIOFFLOAD_API_VERSION) <= LooseVersion(
+            api_version
+        ) and module.params["protocol"] in ["s3", "azure"]:
+            offload_limit = MULTIOFFLOAD_LIMIT_SAME_TYPE
+        if len(offloads) >= offload_limit:
             module.fail_json(
                 msg="Cannot add offload target {0}. "
                 "Offload Target Limit of {1} would be exceeded.".format(
-                    module.params["name"], MULTIOFFLOAD_LIMIT
+                    module.params["name"], offload_limit
                 )
             )
         if offloads and offloads[0].protocol != module.params["protocol"]:

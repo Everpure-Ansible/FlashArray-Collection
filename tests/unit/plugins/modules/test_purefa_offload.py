@@ -962,10 +962,12 @@ class TestMainFunction:
         mock_ansible_module.return_value = mock_module
         mock_array = Mock()
         mock_array.get_rest_version.return_value = "2.30"
-        # Return one existing offload (limit is 1)
+        # Two existing S3 targets: the Purity//FA 6.2.3+ limit of two is reached
         existing_offload = Mock()
         existing_offload.protocol = "s3"
-        mock_array.get_offloads.return_value = Mock(items=[existing_offload])
+        mock_array.get_offloads.return_value = Mock(
+            items=[existing_offload, existing_offload]
+        )
         mock_get_array.return_value = mock_array
         mock_get_target.return_value = None
 
@@ -974,7 +976,6 @@ class TestMainFunction:
 
         mock_module.fail_json.assert_called_once()
 
-    @patch("plugins.modules.purefa_offload.MULTIOFFLOAD_LIMIT", 2)
     @patch("plugins.modules.purefa_offload.AnsibleModule")
     @patch("plugins.modules.purefa_offload.get_array")
     @patch("plugins.modules.purefa_offload.get_target")
@@ -1003,7 +1004,7 @@ class TestMainFunction:
         mock_ansible_module.return_value = mock_module
         mock_array = Mock()
         mock_array.get_rest_version.return_value = "2.30"
-        # Return existing offload with different protocol (need limit > 1)
+        # Existing S3 target; REST 2.30 allows two targets but only of one type
         existing_offload = Mock()
         existing_offload.protocol = "s3"
         mock_array.get_offloads.return_value = Mock(items=[existing_offload])
@@ -1014,3 +1015,121 @@ class TestMainFunction:
             main()
 
         mock_module.fail_json.assert_called_once()
+
+    @patch("plugins.modules.purefa_offload.AnsibleModule")
+    @patch("plugins.modules.purefa_offload.get_array")
+    @patch("plugins.modules.purefa_offload.get_target")
+    def test_main_offload_limit_one_before_rest_2_11(
+        self, mock_get_target, mock_get_array, mock_ansible_module
+    ):
+        """Test main() keeps the single-target limit below Purity//FA 6.2.3"""
+        import pytest
+        from plugins.modules.purefa_offload import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "new-offload",
+            "state": "present",
+            "protocol": "s3",
+            "access_key": "access123",
+            "secret": "secret123",
+            "bucket": "mybucket",
+            "account": "myaccount",
+            "address": "10.0.0.1",
+            "share": "/share",
+            "profile": None,
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.10"
+        existing_offload = Mock()
+        existing_offload.protocol = "s3"
+        mock_array.get_offloads.return_value = Mock(items=[existing_offload])
+        mock_get_array.return_value = mock_array
+        mock_get_target.return_value = None
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once()
+        assert "Limit of 1" in mock_module.fail_json.call_args[1]["msg"]
+
+    @patch("plugins.modules.purefa_offload.AnsibleModule")
+    @patch("plugins.modules.purefa_offload.get_array")
+    @patch("plugins.modules.purefa_offload.get_target")
+    @patch("plugins.modules.purefa_offload.create_offload")
+    def test_main_second_s3_target_allowed_from_rest_2_11(
+        self, mock_create, mock_get_target, mock_get_array, mock_ansible_module
+    ):
+        """Test main() allows a second S3 target on Purity//FA 6.2.3 and higher"""
+        from plugins.modules.purefa_offload import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "new-offload",
+            "state": "present",
+            "protocol": "s3",
+            "access_key": "access123",
+            "secret": "secret123",
+            "bucket": "mybucket",
+            "account": "myaccount",
+            "address": "10.0.0.1",
+            "share": "/share",
+            "profile": None,
+            "context": "",
+        }
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.11"
+        existing_offload = Mock()
+        existing_offload.protocol = "s3"
+        mock_array.get_offloads.return_value = Mock(items=[existing_offload])
+        mock_get_array.return_value = mock_array
+        mock_get_target.return_value = None
+
+        main()
+
+        mock_module.fail_json.assert_not_called()
+        mock_create.assert_called_once()
+
+    @patch("plugins.modules.purefa_offload.AnsibleModule")
+    @patch("plugins.modules.purefa_offload.get_array")
+    @patch("plugins.modules.purefa_offload.get_target")
+    def test_main_second_nfs_target_still_refused(
+        self, mock_get_target, mock_get_array, mock_ansible_module
+    ):
+        """Test main() never allows two NFS targets, whatever the REST version"""
+        import pytest
+        from plugins.modules.purefa_offload import main
+
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "new-offload",
+            "state": "present",
+            "protocol": "nfs",
+            "access_key": None,
+            "secret": None,
+            "bucket": None,
+            "account": None,
+            "address": "10.0.0.1",
+            "share": "/share",
+            "profile": "nfs",
+            "context": "",
+        }
+        mock_module.fail_json.side_effect = SystemExit(1)
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.20"
+        existing_offload = Mock()
+        existing_offload.protocol = "nfs"
+        mock_array.get_offloads.return_value = Mock(items=[existing_offload])
+        mock_get_array.return_value = mock_array
+        mock_get_target.return_value = None
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_module.fail_json.assert_called_once()
+        assert "Limit of 1" in mock_module.fail_json.call_args[1]["msg"]
