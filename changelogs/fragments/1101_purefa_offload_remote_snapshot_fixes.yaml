@@ -1,4 +1,4 @@
 bugfixes:
-  - purefa_snap - deleting a snapshot that lives on an offload target (``state: absent`` with ``offload``) sent the wrong request body to the array and failed before anything was changed. The remote snapshot is now destroyed, and eradicated when ``eradicate`` is set.
+  - "purefa_snap - deleting a snapshot that lives on an offload target (``state: absent`` with ``offload``) sent the wrong request body to the array and failed before anything was changed. The remote snapshot is now destroyed, and eradicated when ``eradicate`` is set."
 minor_changes:
-  - purefa_offload - allow a second offload target on Purity//FA 6.2.3 and higher when both targets are S3 or both are Azure, matching the array limit. Earlier Purity//FA releases keep the single-target limit.
+  - "purefa_offload - allow a second offload target on Purity//FA 6.2.3 and higher when both targets are S3 or both are Azure, matching the array limit. Earlier Purity//FA releases keep the single-target limit."
