@@ -1,0 +1,6 @@
+minor_changes:
+  - "purefa_realm - add ``bw_floor`` and ``iops_floor`` to set, change or remove (``0``) the realm QoS floors introduced in Purity//FA 6.10.0 (REST API 2.47 or higher). Limits and floors given in one task reach the array in a single request, and a new realm is created with its QoS settings in the create call instead of a second request."
+  - "purefa_info - the ``realms`` subset reports ``bandwidth_floor`` and ``iops_floor`` in each realm's ``qos`` dict on arrays that support realm QoS floors."
+bugfixes:
+  - "purefa_realm - the documented maximum QoS values, 512G bandwidth and 100M IOPs, were rejected as out of range."
+  - "purefa_realm - ``bw_qos: 0`` or ``iops_qos: 0`` on a realm that does not exist yet failed with an out-of-range error instead of creating the realm without that limit."

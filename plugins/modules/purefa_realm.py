@@ -51,15 +51,41 @@ options:
     - Bandwidth limit for realm in M or G units.
       M will set MB/s
       G will set GB/s
-      To clear an existing QoS setting use 0 (zero)
+    - The array accepts values from 1M (1048576 bytes/s) to 512G.
+    - To clear an existing QoS setting use 0 (zero)
     type: str
   iops_qos:
     description:
     - IOPs limit for realm - use value or K or M
       K will mean 1000
       M will mean 1000000
-      To clear an existing IOPs setting use 0 (zero)
+    - The array accepts values from 100 to 100M.
+    - To clear an existing IOPs setting use 0 (zero)
     type: str
+  bw_floor:
+    description:
+    - Bandwidth floor for the realm, in the same units as I(bw_qos).
+    - While the array is under contention the realm's I/O is prioritized
+      until it reaches this bandwidth. A floor is a target, not a
+      reservation, and has no effect while the array is not under contention.
+    - The array accepts values from 1M (1048576 bytes/s) to 512G.
+    - To clear an existing floor use 0 (zero)
+    - Requires Purity//FA REST API 2.47 or higher. QoS floors on realms
+      became generally available in Purity//FA 6.10.0.
+    type: str
+    version_added: '1.47.0'
+  iops_floor:
+    description:
+    - IOPs floor for the realm, in the same units as I(iops_qos).
+    - While the array is under contention the realm's I/O is prioritized
+      until it reaches this many IOPs. A floor is a target, not a
+      reservation, and has no effect while the array is not under contention.
+    - The array accepts values from 100 to 100M.
+    - To clear an existing floor use 0 (zero)
+    - Requires Purity//FA REST API 2.47 or higher. QoS floors on realms
+      became generally available in Purity//FA 6.10.0.
+    type: str
+    version_added: '1.47.0'
   rename:
     description:
     - Value to rename the specified realm to
@@ -84,6 +110,13 @@ options:
     default: False
 extends_documentation_fragment:
 - everpure.flasharray.everpure.fa
+notes:
+- QoS limits and floors given in the same task are applied to the realm in
+  a single request, and a new realm is created with its QoS settings in
+  place rather than having them added afterwards.
+- The array does not stop a floor being set higher than the matching
+  limit, but a realm can never reach such a floor because the limit still
+  applies. Floors are honoured before any priority weighting.
 """
 
 EXAMPLES = r"""
@@ -95,11 +128,37 @@ EXAMPLES = r"""
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
 
+- name: Create new realm with QoS limits and floors
+  everpure.flasharray.purefa_realm:
+    name: gold
+    bw_qos: 2G
+    iops_qos: 100K
+    bw_floor: 500M
+    iops_floor: 20K
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
 - name: Update realm QoS limits
   everpure.flasharray.purefa_realm:
     name: foo
     bw_qos: 0
     iops_qos: 5555
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
+- name: Set QoS floors on an existing realm
+  everpure.flasharray.purefa_realm:
+    name: foo
+    bw_floor: 100M
+    iops_floor: 5K
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
+- name: Remove the QoS floors from a realm
+  everpure.flasharray.purefa_realm:
+    name: foo
+    bw_floor: 0
+    iops_floor: 0
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
 
@@ -142,7 +201,7 @@ except ImportError:
     HAS_PURESTORAGE = False
 
 try:
-    # Only this model accepts the empty string that clears a QoS limit
+    # Only this model accepts the empty string that clears a QoS value
     from pypureclient.flasharray import ContainerQosPatch
 except ImportError:
     ContainerQosPatch = None
@@ -160,10 +219,32 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.version import
     LooseVersion,
 )
 from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers import (
+    check_api_version,
     check_response,
 )
 
 MINIMUM_API_VERSION = "2.36"
+# bandwidth_floor and iops_floor joined the container QoS object in this version
+FLOOR_API_VERSION = "2.47"
+MIN_BWS = 1048576
+MAX_BWS = 549755813888
+MIN_IOPS = 100
+MAX_IOPS = 100000000
+
+# Module option -> the container QoS field it drives
+QOS_FIELDS = {
+    "bw_qos": "bandwidth_limit",
+    "iops_qos": "iops_limit",
+    "bw_floor": "bandwidth_floor",
+    "iops_floor": "iops_floor",
+}
+QOS_LABELS = {
+    "bw_qos": "Bandwidth QoS",
+    "iops_qos": "IOPs QoS",
+    "bw_floor": "Bandwidth floor",
+    "iops_floor": "IOPs floor",
+}
+FLOOR_OPTIONS = ("bw_floor", "iops_floor")
 
 
 def get_pending_realm(module, array):
@@ -192,22 +273,82 @@ def get_renamed_realm(module, array):
 
 
 def qos_clear_requested(value):
-    """True when a QoS parameter asks for the limit to be removed"""
+    """True when a QoS parameter asks for the value to be removed"""
     return value is not None and str(value).strip() in ("", "0")
 
 
-def clear_qos_patch(module, **limits):
-    """Build the QoS patch that removes the given limits
+def floors_requested(module):
+    """True when the task names either QoS floor option"""
+    return any(module.params[option] is not None for option in FLOOR_OPTIONS)
 
-    The REST API clears a container QoS limit with an empty string, which
+
+def parse_qos_value(module, option):
+    """The value the array expects for a QoS option
+
+    Returns None when the option was not given, the empty string when the
+    option asks for the current value to be removed, and otherwise the
+    integer the array expects, checked against the range it enforces.
+    """
+    value = module.params[option]
+    if value is None:
+        return None
+    if qos_clear_requested(value):
+        return ""
+    if option in ("bw_qos", "bw_floor"):
+        number = int(human_to_bytes(value))
+        low, high = MIN_BWS, MAX_BWS
+    else:
+        number = int(human_to_real(value))
+        low, high = MIN_IOPS, MAX_IOPS
+    if not low <= number <= high:
+        module.fail_json(
+            msg="{0} value {1} out of range.".format(QOS_LABELS[option], value)
+        )
+    return number
+
+
+def requested_qos(module):
+    """Container QoS field -> wanted value, for every QoS option given"""
+    wanted = {}
+    for option, field in QOS_FIELDS.items():
+        value = parse_qos_value(module, option)
+        if value is not None:
+            wanted[field] = value
+    return wanted
+
+
+def current_qos(realm):
+    """Container QoS field -> value the realm has now (0 when unset)"""
+    qos = getattr(realm, "qos", None)
+    return {field: getattr(qos, field, 0) or 0 for field in QOS_FIELDS.values()}
+
+
+def qos_changes(module, current):
+    """The QoS fields whose wanted value differs from the realm's"""
+    changes = {}
+    for field, wanted in requested_qos(module).items():
+        if wanted == "":
+            if current[field]:
+                changes[field] = ""
+        elif wanted != current[field]:
+            changes[field] = wanted
+    return changes
+
+
+def qos_model(module, fields):
+    """The SDK object that carries the given container QoS fields
+
+    The REST API clears a container QoS value with an empty string, which
     only the ContainerQosPatch model accepts.
     """
-    if ContainerQosPatch is None:
-        module.fail_json(
-            msg="Clearing realm QoS limits requires a py-pure-client release "
-            "that provides the ContainerQosPatch model."
-        )
-    return ContainerQosPatch(**{key: "" for key in limits})
+    if "" in fields.values():
+        if ContainerQosPatch is None:
+            module.fail_json(
+                msg="Clearing realm QoS values requires a py-pure-client release "
+                "that provides the ContainerQosPatch model."
+            )
+        return ContainerQosPatch(**fields)
+    return ContainerQos(**fields)
 
 
 def rename_realm(module, array):
@@ -224,6 +365,7 @@ def rename_realm(module, array):
 def make_realm(module, array):
     """Create Realm"""
     changed = True
+    realm = {}
     if module.params["quota"]:
         quota = int(human_to_bytes(module.params["quota"]))
         if quota % 512 != 0:
@@ -232,79 +374,21 @@ def make_realm(module, array):
             module.fail_json(
                 msg="Quota must be a value greater than or equal to 1048576 bytes"
             )
-        if not module.check_mode:
+        realm["quota_limit"] = quota
+    # A new realm has nothing to clear, so only values to set are sent
+    qos = {
+        field: value for field, value in requested_qos(module).items() if value != ""
+    }
+    if qos:
+        realm["qos"] = ContainerQos(**qos)
+    if not module.check_mode:
+        if realm:
             res = array.post_realms(
-                names=[module.params["name"]], realm=RealmPost(quota_limit=quota)
+                names=[module.params["name"]], realm=RealmPost(**realm)
             )
-            check_response(res, module, f"Creation of realm {module.params['name']}")
-    else:
-        if not module.check_mode:
+        else:
             res = array.post_realms(names=[module.params["name"]])
-            check_response(res, module, f"Creation of realm {module.params['name']}")
-    if module.params["bw_qos"] and not module.params["iops_qos"]:
-        if int(human_to_bytes(module.params["bw_qos"])) in range(1048576, 549755813888):
-            changed = True
-            if not module.check_mode:
-                res = array.patch_realms(
-                    names=[module.params["name"]],
-                    realm=RealmPatch(
-                        qos=ContainerQos(
-                            bandwidth_limit=int(human_to_bytes(module.params["bw_qos"]))
-                        )
-                    ),
-                )
-                check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS"
-                )
-        else:
-            module.fail_json(
-                msg="Bandwidth QoS value {0} out of range.".format(
-                    module.params["bw_qos"]
-                )
-            )
-    elif module.params["iops_qos"] and not module.params["bw_qos"]:
-        if int(human_to_real(module.params["iops_qos"])) in range(100, 100000000):
-            changed = True
-            if not module.check_mode:
-                res = array.patch_realms(
-                    names=[module.params["name"]],
-                    realm=RealmPatch(
-                        qos=ContainerQos(
-                            iops_limit=int(human_to_real(module.params["iops_qos"]))
-                        )
-                    ),
-                )
-                check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS"
-                )
-        else:
-            module.fail_json(
-                msg="IOPs QoS value {0} out of range.".format(module.params["iops_qos"])
-            )
-    elif module.params["iops_qos"] and module.params["bw_qos"]:
-        bw_qos_size = int(human_to_bytes(module.params["bw_qos"]))
-        if int(human_to_real(module.params["iops_qos"])) in range(
-            100, 100000000
-        ) and bw_qos_size in range(1048576, 549755813888):
-            changed = True
-            if not module.check_mode:
-                res = array.patch_realms(
-                    names=[module.params["name"]],
-                    realm=RealmPatch(
-                        qos=ContainerQos(
-                            iops_limit=int(human_to_real(module.params["iops_qos"])),
-                            bandwidth_limit=int(
-                                human_to_bytes(module.params["bw_qos"])
-                            ),
-                        ),
-                    ),
-                )
-                check_response(
-                    res, module, f"Setting of realm {module.params['name']} QoS"
-                )
-        else:
-            module.fail_json(msg="IOPs or Bandwidth QoS value out of range.")
-
+        check_response(res, module, f"Creation of realm {module.params['name']}")
     module.exit_json(changed=changed)
 
 
@@ -312,91 +396,17 @@ def update_realm(module, array):
     """Update Realm"""
     changed = False
     realm = list(array.get_realms(names=[module.params["name"]]).items)[0]
-    current_realm = {
-        "quota": realm.quota_limit,
-        "bw": getattr(realm.qos, "bandwidth_limit", 0) or 0,
-        "iops": getattr(realm.qos, "iops_limit", 0) or 0,
-    }
-    if qos_clear_requested(module.params["bw_qos"]):
-        if current_realm["bw"]:
-            changed = True
-            if not module.check_mode:
-                res = array.patch_realms(
-                    names=[module.params["name"]],
-                    realm=RealmPatch(qos=clear_qos_patch(module, bandwidth_limit=True)),
-                )
-                check_response(
-                    res,
-                    module,
-                    f"Realm {module.params['name']} Bandwidth QoS clear",
-                )
-    elif module.params["bw_qos"]:
-        if int(human_to_bytes(module.params["bw_qos"])) != current_realm["bw"]:
-            if int(human_to_bytes(module.params["bw_qos"])) in range(
-                1048576, 549755813888
-            ):
-                changed = True
-                if not module.check_mode:
-                    res = array.patch_realms(
-                        names=[module.params["name"]],
-                        realm=RealmPatch(
-                            qos=ContainerQos(
-                                bandwidth_limit=int(
-                                    human_to_bytes(module.params["bw_qos"])
-                                )
-                            )
-                        ),
-                    )
-                    check_response(
-                        res,
-                        module,
-                        f"Realm {module.params['name']} Bandwidth QoS change",
-                    )
-            else:
-                module.fail_json(
-                    msg="Bandwidth QoS value {0} out of range.".format(
-                        module.params["bw_qos"]
-                    )
-                )
-    if qos_clear_requested(module.params["iops_qos"]):
-        if current_realm["iops"]:
-            changed = True
-            if not module.check_mode:
-                res = array.patch_realms(
-                    names=[module.params["name"]],
-                    realm=RealmPatch(qos=clear_qos_patch(module, iops_limit=True)),
-                )
-                check_response(
-                    res,
-                    module,
-                    f"Realm {module.params['name']} IOPs QoS clear",
-                )
-    elif module.params["iops_qos"]:
-        if int(human_to_real(module.params["iops_qos"])) != current_realm["iops"]:
-            if int(human_to_real(module.params["iops_qos"])) in range(100, 100000000):
-                changed = True
-                if not module.check_mode:
-                    res = array.patch_realms(
-                        names=[module.params["name"]],
-                        realm=RealmPatch(
-                            qos=ContainerQos(
-                                iops_limit=int(human_to_real(module.params["iops_qos"]))
-                            )
-                        ),
-                    )
-                    check_response(
-                        res,
-                        module,
-                        f"Realm {module.params['name']} IOPs QoS change",
-                    )
-            else:
-                module.fail_json(
-                    msg="IOPs QoS value {0} out of range.".format(
-                        module.params["iops_qos"]
-                    )
-                )
+    changes = qos_changes(module, current_qos(realm))
+    if changes:
+        changed = True
+        if not module.check_mode:
+            res = array.patch_realms(
+                names=[module.params["name"]],
+                realm=RealmPatch(qos=qos_model(module, changes)),
+            )
+            check_response(res, module, f"Realm {module.params['name']} QoS change")
     if module.params["quota"]:
-        if int(human_to_bytes(module.params["quota"])) != current_realm["quota"]:
+        if int(human_to_bytes(module.params["quota"])) != realm.quota_limit:
             if int(human_to_bytes(module.params["quota"])) % 512 == 0:
                 changed = True
                 if not module.check_mode:
@@ -470,6 +480,8 @@ def main():
             state=dict(type="str", default="present", choices=["absent", "present"]),
             bw_qos=dict(type="str"),
             iops_qos=dict(type="str"),
+            bw_floor=dict(type="str"),
+            iops_floor=dict(type="str"),
             quota=dict(type="str"),
             eradicate=dict(type="bool", default=False),
             rename=dict(type="str"),
@@ -487,6 +499,8 @@ def main():
         module.fail_json(
             msg="Realms are not supported. Purity//FA 6.6.11, or higher, is required."
         )
+    if floors_requested(module):
+        check_api_version(array, FLOOR_API_VERSION, module, "Realm QoS floor support")
     realm = get_realm(module, array)
     xrealm = get_pending_realm(module, array)
 
