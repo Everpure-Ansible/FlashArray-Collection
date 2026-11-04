@@ -1928,6 +1928,71 @@ class TestGenerateRealmsDict:
         assert "realm-1" in result
         assert result["realm-1"]["destroyed"] is False
 
+    @staticmethod
+    def _realm_array(rest_version, qos):
+        """An array with one realm whose qos object has exactly the given fields"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = rest_version
+        mock_space = Mock()
+        for field in (
+            "data_reduction",
+            "footprint",
+            "shared",
+            "snapshots",
+            "thin_provisioning",
+            "total_provisioned",
+            "total_reduction",
+            "total_used",
+            "unique",
+            "used_provisioned",
+            "virtual",
+        ):
+            setattr(mock_space, field, 0)
+        mock_realm = Mock()
+        mock_realm.name = "realm-1"
+        mock_realm.quota_limit = None
+        mock_realm.space = mock_space
+        mock_realm.qos = qos
+        mock_realm.created = 1609459200000
+        mock_realm.destroyed = False
+        mock_array.get_realms.return_value = Mock(items=[mock_realm])
+        mock_array.get_realms_tags.return_value = Mock(items=[])
+        return mock_array
+
+    def test_generate_realms_dict_reports_floors_at_2_47(self):
+        """From REST 2.47 the qos dict carries the floors as well as the limits"""
+        qos = Mock(
+            spec=["bandwidth_limit", "iops_limit", "bandwidth_floor", "iops_floor"]
+        )
+        qos.bandwidth_limit = 104857600
+        qos.iops_limit = 2000
+        qos.bandwidth_floor = 52428800
+        qos.iops_floor = 1000
+        mock_array = self._realm_array("2.54", qos)
+
+        result = generate_realms_dict(mock_array, performance=False)
+
+        assert result["realm-1"]["qos"] == {
+            "iops_limit": 2000,
+            "bandwidth_limit": 104857600,
+            "iops_floor": 1000,
+            "bandwidth_floor": 52428800,
+        }
+
+    def test_generate_realms_dict_no_floor_keys_below_2_47(self):
+        """Below REST 2.47 the array has no floors and none are reported"""
+        qos = Mock(spec=["bandwidth_limit", "iops_limit"])
+        qos.bandwidth_limit = 104857600
+        qos.iops_limit = 2000
+        mock_array = self._realm_array("2.46", qos)
+
+        result = generate_realms_dict(mock_array, performance=False)
+
+        assert result["realm-1"]["qos"] == {
+            "iops_limit": 2000,
+            "bandwidth_limit": 104857600,
+        }
+
 
 class TestGenerateConfigDict:
     """Test cases for generate_config_dict function"""

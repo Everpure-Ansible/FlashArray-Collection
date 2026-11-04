@@ -129,6 +129,8 @@ TAGS_API_VERSION = "2.39"
 TGROUP_API_VERSION = "2.54"
 # QoS realms arrived one version after the QoS policy endpoint itself
 POLICY_REALMS_API_VERSION = "2.55"
+# bandwidth_floor and iops_floor joined the realm QoS object in this version
+FLOOR_API_VERSION = "2.47"
 # The support and software read endpoints each arrived separately
 SOFTWARE_STEPS_API_VERSION = "2.2"
 SOFTWARE_VERSIONS_API_VERSION = "2.9"
@@ -3587,6 +3589,7 @@ def generate_workload_dict(array):
 
 def generate_realms_dict(array, performance):
     realms_info = {}
+    api_version = array.get_rest_version()
     realms = list(array.get_realms().items)
     for realm in realms:
         name = realm.name
@@ -3615,6 +3618,13 @@ def generate_realms_dict(array, performance):
             "iops_limit": getattr(realm.qos, "iops_limit", None),
             "bandwidth_limit": getattr(realm.qos, "bandwidth_limit", None),
         }
+        if LooseVersion(FLOOR_API_VERSION) <= LooseVersion(api_version):
+            realms_info[name]["qos"]["iops_floor"] = getattr(
+                realm.qos, "iops_floor", None
+            )
+            realms_info[name]["qos"]["bandwidth_floor"] = getattr(
+                realm.qos, "bandwidth_floor", None
+            )
         if realms_info[name]["destroyed"]:
             realms_info[name]["time_remaining"] = realm.time_remaining
     if LooseVersion(TAGS_API_VERSION) <= LooseVersion(array.get_rest_version()):
