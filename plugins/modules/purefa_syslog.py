@@ -27,7 +27,10 @@ author:
 options:
   state:
     description:
-    - Create, updatee, delete or test syslog servers configuration
+    - Create, update, delete or test syslog servers configuration
+    - C(test) runs the array's syslog test, which exercises every configured
+      syslog server and returns a result for each of them, as the REST API has
+      no per-server test. I(name) must still refer to an existing server.
     default: present
     type: str
     choices: [ absent, present, test ]

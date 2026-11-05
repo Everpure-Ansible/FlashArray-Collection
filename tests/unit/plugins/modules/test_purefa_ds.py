@@ -576,6 +576,108 @@ class TestUpdateDsManagementFields:
     @patch("plugins.modules.purefa_ds.DirectoryServiceManagement")
     @patch("plugins.modules.purefa_ds.check_response")
     @patch("plugins.modules.purefa_ds.get_with_context")
+    def test_update_ds_check_peer_omitted_keeps_current(
+        self,
+        mock_get_with_context,
+        mock_check_response,
+        mock_ds_mgmt,
+        mock_ds_class,
+    ):
+        """Omitting check_peer must not switch it off on a service that has it on"""
+        mock_module = Mock()
+        mock_module.params = {
+            "dstype": "management",
+            "context": "",
+            "uri": None,
+            "base_dn": None,
+            "enable": True,
+            "bind_user": None,
+            "bind_password": None,
+            "force_bind_password": False,
+            "certificate": None,
+            "check_peer": None,
+            "user_object": None,
+            "user_login": None,
+        }
+        mock_module.check_mode = False
+        mock_array = Mock()
+
+        mock_ds = Mock()
+        mock_ds.name = "management"
+        mock_ds.uris = ["ldaps://test.example.com"]
+        mock_ds.base_dn = "DC=example,DC=com"
+        mock_ds.bind_user = "admin"
+        mock_ds.enabled = True
+        mock_ds.check_peer = True
+        mock_ds.ca_certificate = "-----BEGIN CERTIFICATE-----"
+        mock_ds.management = Mock()
+        mock_ds.management.user_login_attribute = "sAMAccountName"
+        mock_ds.management.user_object_class = "User"
+        mock_get_with_context.return_value = Mock(items=[mock_ds], status_code=200)
+
+        from plugins.modules.purefa_ds import update_ds
+
+        update_ds(mock_module, mock_array)
+
+        mock_module.warn.assert_not_called()
+        assert mock_ds_class.call_args[1]["check_peer"] is True
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_ds.DirectoryService")
+    @patch("plugins.modules.purefa_ds.DirectoryServiceManagement")
+    @patch("plugins.modules.purefa_ds.check_response")
+    @patch("plugins.modules.purefa_ds.get_with_context")
+    def test_update_ds_check_peer_false_disables(
+        self,
+        mock_get_with_context,
+        mock_check_response,
+        mock_ds_mgmt,
+        mock_ds_class,
+    ):
+        """An explicit check_peer=false still turns authenticity checking off"""
+        mock_module = Mock()
+        mock_module.params = {
+            "dstype": "management",
+            "context": "",
+            "uri": None,
+            "base_dn": None,
+            "enable": True,
+            "bind_user": None,
+            "bind_password": None,
+            "force_bind_password": False,
+            "certificate": None,
+            "check_peer": False,
+            "user_object": None,
+            "user_login": None,
+        }
+        mock_module.check_mode = False
+        mock_array = Mock()
+
+        mock_ds = Mock()
+        mock_ds.name = "management"
+        mock_ds.uris = ["ldaps://test.example.com"]
+        mock_ds.base_dn = "DC=example,DC=com"
+        mock_ds.bind_user = "admin"
+        mock_ds.enabled = True
+        mock_ds.check_peer = True
+        mock_ds.ca_certificate = "-----BEGIN CERTIFICATE-----"
+        mock_ds.management = Mock()
+        mock_ds.management.user_login_attribute = "sAMAccountName"
+        mock_ds.management.user_object_class = "User"
+        mock_get_with_context.return_value = Mock(items=[mock_ds], status_code=200)
+
+        from plugins.modules.purefa_ds import update_ds
+
+        update_ds(mock_module, mock_array)
+
+        mock_module.warn.assert_not_called()
+        assert mock_ds_class.call_args[1]["check_peer"] is False
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_ds.DirectoryService")
+    @patch("plugins.modules.purefa_ds.DirectoryServiceManagement")
+    @patch("plugins.modules.purefa_ds.check_response")
+    @patch("plugins.modules.purefa_ds.get_with_context")
     def test_update_ds_enable_requires_password(
         self,
         mock_get_with_context,

@@ -1,0 +1,4 @@
+bugfixes:
+  - "purefa_tgroup - ``state: absent`` on an array that is not a member of a fleet failed with ``Topology groups require the array to be a member of a fleet``; it is now a no-op, so cleanup tasks stay idempotent."
+  - "purefa_ds - ``check_peer`` defaulted to ``false`` and was applied on every run, so a task that omitted it switched server authenticity checking off on a management directory service that had it enabled. The option is now left unchanged when it is not specified."
+  - "purefa_syslog - document that ``state: test`` exercises every configured syslog server and returns a result for each, as the REST API has no per-server test."
