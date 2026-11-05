@@ -58,6 +58,7 @@ from plugins.modules.purefa_vg import (
     _priority_adjustment,
     _priority_bands,
     _stored_priority,
+    _validate_priority,
 )
 import plugins.modules.purefa_vg as _vg_module
 
@@ -1182,6 +1183,46 @@ class TestQaFixes:
         mock_module.fail_json.side_effect = SystemExit("fail_json called")
         return mock_module
 
+    @patch("plugins.modules.purefa_vg.update_vgroup")
+    @patch("plugins.modules.purefa_vg.make_vgroup")
+    @patch("plugins.modules.purefa_vg.get_pending_vgroup")
+    @patch("plugins.modules.purefa_vg.get_vgroup")
+    @patch("plugins.modules.purefa_vg.get_array")
+    @patch("plugins.modules.purefa_vg.AnsibleModule")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.HAS_PURESTORAGE", True)
+    def test_main_refuses_equals_before_priority_bands(
+        self,
+        mock_lv,
+        mock_ansible_module,
+        mock_get_array,
+        mock_get_vgroup,
+        mock_get_pending,
+        mock_make_vgroup,
+        mock_update_vgroup,
+    ):
+        """On a release without QoS priority bands the "=" operator is
+        refused by main() before any lookup or write"""
+        from plugins.modules.purefa_vg import main
+
+        mock_module = self._main_module(priority_operator="=", priority_value=10)
+        mock_ansible_module.return_value = mock_module
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.54"
+        mock_array.get_arrays.return_value = Mock(items=[Mock(version="6.10.6")])
+        mock_get_array.return_value = mock_array
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "6.12" in mock_module.fail_json.call_args[1]["msg"]
+        mock_get_vgroup.assert_not_called()
+        mock_make_vgroup.assert_not_called()
+        mock_update_vgroup.assert_not_called()
+
     @patch("plugins.modules.purefa_vg.make_vgroup")
     @patch("plugins.modules.purefa_vg.rename_exists")
     @patch("plugins.modules.purefa_vg.get_pending_vgroup")
@@ -1607,3 +1648,63 @@ class TestPriorityNullValue:
             priority_adjustment_operator="+", priority_adjustment_value=0
         )
         mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestValidatePriority:
+    """purefa_vg refuses the "=" operator and -10 where the array cannot store them"""
+
+    @staticmethod
+    def _module(operator, value):
+        module = Mock()
+        module.params = {"priority_operator": operator, "priority_value": value}
+        module.fail_json = Mock(side_effect=SystemExit("fail_json called"))
+        return module
+
+    @staticmethod
+    def _array(purity):
+        array = Mock()
+        array.get_arrays.return_value = Mock(items=[Mock(version=purity)])
+        return array
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_equals_is_accepted_with_priority_bands(self, mock_lv):
+        for value in (-10, 0, 10):
+            module = self._module("=", value)
+            _validate_priority(module, self._array("6.12.4"))
+            module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_equals_is_refused_before_priority_bands(self, mock_lv):
+        module = self._module("=", 10)
+        try:
+            _validate_priority(module, self._array("6.10.6"))
+        except SystemExit:
+            pass
+        module.fail_json.assert_called_once()
+        assert "6.12" in module.fail_json.call_args[1]["msg"]
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_minus_ten_needs_the_equals_operator(self, mock_lv):
+        for operator in ("+", "-"):
+            module = self._module(operator, -10)
+            try:
+                _validate_priority(module, self._array("6.12.4"))
+            except SystemExit:
+                pass
+            module.fail_json.assert_called_once()
+            assert "-10" in module.fail_json.call_args[1]["msg"]
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_relative_forms_pass_on_every_release(self, mock_lv):
+        for purity in ("6.10.6", "6.12.4"):
+            for operator, value in (("+", 0), ("+", 10), ("-", 10), ("-", 0)):
+                module = self._module(operator, value)
+                _validate_priority(module, self._array(purity))
+                module.fail_json.assert_not_called()
+
+    def test_no_priority_options_is_a_noop(self):
+        module = self._module(None, None)
+        array = Mock()
+        _validate_priority(module, array)
+        module.fail_json.assert_not_called()
+        array.get_arrays.assert_not_called()

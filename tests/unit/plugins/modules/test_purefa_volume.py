@@ -7061,3 +7061,126 @@ class TestCreateMultiVolumeNullPriority:
         for name in ("vol00", "vol01"):
             assert volfact[name]["priority_operator"] == "+"
             assert volfact[name]["priority_value"] == 0
+
+
+class TestCreateMultiVolumePromotion:
+    """create_multi_volume with promotion_state but no priority (latent
+    UnboundLocalError on prio_temp)"""
+
+    @staticmethod
+    def _module(promotion_state="promoted"):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.fail_json = Mock(side_effect=SystemExit("fail_json called"))
+        mock_module.params = {
+            "name": "vol",
+            "size": "1G",
+            "count": 2,
+            "start": 0,
+            "digits": 2,
+            "suffix": "",
+            "bw_qos": None,
+            "iops_qos": None,
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": promotion_state,
+            "priority_operator": None,
+            "priority_value": None,
+            "with_default_protection": True,
+            "context": "",
+        }
+        return mock_module
+
+    @staticmethod
+    def _array(promotion_status_code=200):
+        created, echoed = [], []
+        for i in range(2):
+            item = Mock()
+            item.name = f"vol0{i}"
+            item.provisioned = 1073741824
+            item.serial = f"SERIAL000{i}"
+            item.created = 1700000000000
+            created.append(item)
+            echo = Mock()
+            echo.name = item.name
+            echo.promotion_status = "promoted"
+            echoed.append(echo)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array_item = Mock()
+        mock_array_item.name = "array1"
+        mock_array.get_arrays.return_value = Mock(items=[mock_array_item])
+        mock_array.post_volumes.return_value = Mock(status_code=200, items=created)
+        error = Mock()
+        error.message = "promotion refused"
+        mock_array.patch_volumes.return_value = Mock(
+            status_code=promotion_status_code, items=echoed, errors=[error]
+        )
+        return mock_array
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.check_vgroup")
+    @patch("plugins.modules.purefa_volume.check_pod")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    def test_promotion_without_priority_reports_the_promotion_echo(
+        self,
+        mock_volume_patch,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_human_to_bytes,
+        mock_check_response,
+    ):
+        mock_human_to_bytes.return_value = 1073741824
+        mock_check_vgroup.return_value = True
+        mock_check_pod.return_value = True
+        mock_module = self._module()
+        mock_array = self._array()
+
+        create_multi_volume(mock_module, mock_array)
+
+        # one PATCH for the promotion, none for a priority
+        mock_array.patch_volumes.assert_called_once()
+        volfact = mock_module.exit_json.call_args[1]["volume"]
+        for name in ("vol00", "vol01"):
+            assert volfact[name]["promotion_status"] == "promoted"
+            assert "priority_operator" not in volfact[name]
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.check_vgroup")
+    @patch("plugins.modules.purefa_volume.check_pod")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    def test_failed_promotion_removes_the_volumes_and_fails(
+        self,
+        mock_volume_patch,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_human_to_bytes,
+        mock_check_response,
+    ):
+        """The volumes are destroyed and eradicated again, so the task fails
+        instead of warning and reporting volumes that no longer exist"""
+        import pytest
+
+        mock_human_to_bytes.return_value = 1073741824
+        mock_check_vgroup.return_value = True
+        mock_check_pod.return_value = True
+        mock_module = self._module()
+        mock_array = self._array(promotion_status_code=400)
+
+        with pytest.raises(SystemExit):
+            create_multi_volume(mock_module, mock_array)
+
+        mock_array.delete_volumes.assert_called_once_with(names=["vol00", "vol01"])
+        mock_module.fail_json.assert_called_once()
+        assert "promotion refused" in mock_module.fail_json.call_args[1]["msg"]
+        mock_module.exit_json.assert_not_called()

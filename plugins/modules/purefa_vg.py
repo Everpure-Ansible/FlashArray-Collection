@@ -92,15 +92,20 @@ options:
     - Only applied when specified; an existing adjustment is left
       untouched by QoS-only or bare I(state=present) calls.
     - Must be specified together with I(priority_value).
+    - C(=) sets an absolute priority and requires Purity//FA 6.12 or later,
+      which stores every adjustment in that form. Older releases accept
+      C(+) and C(-) only.
     type: str
-    choices: [ +, '-' ]
+    choices: [ +, '-', '=' ]
     version_added: '1.13.0'
   priority_value:
     description:
     - DMM Priority Adjustment value
     - Only applied when specified, together with I(priority_operator).
+    - C(-10) is only valid with the C(=) operator; a relative reduction is
+      C(-) with C(10).
     type: int
-    choices: [ 0, 10 ]
+    choices: [ -10, 0, 10 ]
     version_added: '1.13.0'
   rename:
     description:
@@ -152,6 +157,14 @@ EXAMPLES = r"""
   everpure.flasharray.purefa_vg:
     name: foo
     priority_operator: '-'
+    priority_value: 10
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
+
+- name: Pin volume group foo to an absolute priority of 10 (Purity//FA 6.12 or later)
+  everpure.flasharray.purefa_vg:
+    name: foo
+    priority_operator: '='
     priority_value: 10
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
@@ -262,6 +275,32 @@ def _priority_bands(array):
         return LooseVersion(PRIORITY_BANDS_PURITY_VERSION) <= LooseVersion(version)
     except (AttributeError, IndexError, TypeError, ValueError):
         return False
+
+
+def _validate_priority(module, array):
+    """Refuse priority forms the array cannot store for a volume group.
+
+    Older releases accept only +10, +0 and -10 for a volume group; the "="
+    operator (and with it the value -10) needs QoS priority bands, that is
+    Purity//FA 6.12 or later. The array's own error for these is a bare
+    "Priority adjustment for vgroup must be +10, +0, or -10".
+    """
+    operator = module.params["priority_operator"]
+    value = module.params["priority_value"]
+    if operator is None or value is None:
+        return
+    if value == -10 and operator != "=":
+        module.fail_json(
+            msg="priority_value -10 is only valid with priority_operator '='; "
+            "use priority_operator '-' with priority_value 10 for a relative "
+            "reduction"
+        )
+    if operator == "=" and not _priority_bands(array):
+        module.fail_json(
+            msg="priority_operator '=' for a volume group requires Purity//FA "
+            "6.12 or later; this array accepts priority_operator '+' or '-' "
+            "with priority_value 10 or 0"
+        )
 
 
 def _stored_priority(operator, value, bands):
@@ -717,8 +756,8 @@ def main():
             start=dict(type="int", default=0),
             digits=dict(type="int", default=1),
             suffix=dict(type="str", default=""),
-            priority_operator=dict(type="str", choices=["+", "-"]),
-            priority_value=dict(type="int", choices=[0, 10]),
+            priority_operator=dict(type="str", choices=["+", "-", "="]),
+            priority_value=dict(type="int", choices=[-10, 0, 10]),
             eradicate=dict(type="bool", default=False),
             rename=dict(type="str"),
             context=dict(type="str", default=""),
@@ -740,6 +779,7 @@ def main():
     state = module.params["state"]
     array = get_array(module)
     api_version = array.get_rest_version()
+    _validate_priority(module, array)
     if (
         LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
         and not module.params["context"]
