@@ -33,6 +33,8 @@ options:
   state:
     description:
     - Define whether the topology group should exist or not.
+    - C(absent) on an array that is not a member of a fleet is a no-op,
+      as such an array cannot hold topology groups.
     type: str
     default: present
     choices: [ absent, present ]
@@ -197,11 +199,18 @@ def fail_on_error(res, module, operation):
 
 
 def check_fleet_membership(module, array):
-    """Topology groups describe fleet topology; fail early outside a fleet."""
+    """Topology groups describe fleet topology; fail early outside a fleet.
+
+    ``state: absent`` is the exception: an array outside a fleet cannot hold
+    a topology group, so there is nothing to remove and the module exits
+    unchanged. That keeps a cleanup task idempotent instead of failing it.
+    """
     res = array.get_fleets()
     if getattr(res, "status_code", None) == 200 and not list(
         getattr(res, "items", []) or []
     ):
+        if module.params["state"] == "absent":
+            module.exit_json(changed=False)
         module.fail_json(
             msg="Topology groups require the array to be a member of a fleet."
         )

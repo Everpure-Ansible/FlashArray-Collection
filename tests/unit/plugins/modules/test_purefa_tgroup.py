@@ -388,6 +388,44 @@ class TestMain:
         )
         mock_module.exit_json.assert_called_once_with(changed=False)
 
+    @patch("plugins.modules.purefa_tgroup.get_tgroup")
+    @patch("plugins.modules.purefa_tgroup.check_api_version")
+    @patch("plugins.modules.purefa_tgroup.get_array")
+    @patch("plugins.modules.purefa_tgroup.AnsibleModule")
+    def test_main_absent_outside_fleet_is_unchanged(
+        self,
+        mock_ansible_module,
+        mock_get_array,
+        _mock_check_api_version,
+        mock_get_tgroup,
+    ):
+        """A cleanup with state=absent on a non-fleet array is a no-op, not a failure"""
+        mock_module = Mock()
+        mock_module.params = {
+            "name": "faqa-tgroup",
+            "state": "absent",
+            "rename": None,
+            "parent": None,
+            "array": [],
+            "tgroup": [],
+            "context": "",
+        }
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_ansible_module.return_value = mock_module
+
+        mock_array = Mock()
+        mock_array.get_fleets.return_value = Mock(status_code=200, items=[])
+        mock_get_array.return_value = mock_array
+
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        mock_get_tgroup.assert_not_called()
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
     @patch("plugins.modules.purefa_tgroup.create_tgroup")
     @patch("plugins.modules.purefa_tgroup.rename_exists", return_value=True)
     @patch("plugins.modules.purefa_tgroup.validate_inputs")
@@ -488,6 +526,7 @@ class TestFleetMembership:
         from plugins.modules.purefa_tgroup import check_fleet_membership
 
         mock_module = Mock()
+        mock_module.params = {"state": "present"}
         mock_array = Mock()
         mock_array.get_fleets.return_value = Mock(status_code=200, items=[])
 
@@ -495,6 +534,25 @@ class TestFleetMembership:
 
         mock_module.fail_json.assert_called_once()
         assert "fleet" in mock_module.fail_json.call_args[1]["msg"]
+
+    def test_absent_outside_fleet_is_unchanged(self):
+        """Nothing can exist outside a fleet, so absent has nothing to do"""
+        from plugins.modules.purefa_tgroup import check_fleet_membership
+
+        mock_module = Mock()
+        mock_module.params = {"state": "absent"}
+        # exit_json ends the module like the real AnsibleModule does
+        mock_module.exit_json.side_effect = SystemExit(0)
+        mock_array = Mock()
+        mock_array.get_fleets.return_value = Mock(status_code=200, items=[])
+
+        try:
+            check_fleet_membership(mock_module, mock_array)
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
 
     def test_fleet_member_passes(self):
         from plugins.modules.purefa_tgroup import check_fleet_membership

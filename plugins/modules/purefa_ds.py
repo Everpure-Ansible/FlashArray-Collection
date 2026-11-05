@@ -102,7 +102,8 @@ options:
     description:
     - Whether or not server authenticity is enforced when a certificate
       is provided
-    default: false
+    - When not specified the current setting of the directory service is
+      left unchanged.
     version_added: 1.24.0
   certificate:
     type: str
@@ -292,13 +293,20 @@ def update_ds(module, array):
             elif module.params["certificate"] != cert:
                 cert = module.params["certificate"]
                 ds_change = True
-        if module.params["check_peer"] and not cert:
-            module.warn(
-                "Cannot check_peer without a CA certificate. Disabling check_peer"
-            )
-            module.params["check_peer"] = False
-        if module.params["check_peer"] != current_ds.check_peer:
-            ds_change = True
+        current_check_peer = getattr(current_ds, "check_peer", False) or False
+        if module.params["check_peer"] is None:
+            # Not specified: keep whatever the array has, so a playbook that
+            # omits check_peer never switches authenticity checking off.
+            check_peer = current_check_peer
+        else:
+            check_peer = module.params["check_peer"]
+            if check_peer and not cert:
+                module.warn(
+                    "Cannot check_peer without a CA certificate. Disabling check_peer"
+                )
+                check_peer = False
+            if check_peer != current_check_peer:
+                ds_change = True
         user_login = getattr(current_ds.management, "user_login_attribute", "")
         user_object = getattr(current_ds.management, "user_object_class", "")
         if (
@@ -325,7 +333,7 @@ def update_ds(module, array):
                 enabled=module.params["enable"],
                 services=[module.params["dstype"]],
                 management=management,
-                check_peer=module.params["check_peer"],
+                check_peer=check_peer,
                 ca_certificate=cert,
             )
         else:
@@ -336,7 +344,7 @@ def update_ds(module, array):
                 enabled=module.params["enable"],
                 services=[module.params["dstype"]],
                 management=management,
-                check_peer=module.params["check_peer"],
+                check_peer=check_peer,
                 ca_certificate=cert,
             )
     else:
@@ -430,7 +438,7 @@ def main():
             dstype=dict(
                 type="str", default="management", choices=["management", "data"]
             ),
-            check_peer=dict(type="bool", default=False),
+            check_peer=dict(type="bool"),
             certificate=dict(type="str"),
             context=dict(type="str", default=""),
         )
