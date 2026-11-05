@@ -1,0 +1,6 @@
+bugfixes:
+  - "purefa_info - the ``volumes`` and ``vgroups`` subsets no longer fail on Purity//FA 6.12, which reports an unset priority adjustment as a null value."
+  - "purefa_volume - calls on an existing volume no longer fail on Purity//FA 6.12 when its priority adjustment is unset."
+  - "purefa_volume - a requested priority adjustment is compared with the form Purity//FA 6.12 stores, so ``+10`` is no longer re-applied on every run."
+  - "purefa_vg - tasks on an existing volume group no longer fail on Purity//FA 6.12 when its priority adjustment is unset."
+  - "purefa_vg - no longer sends an empty fleet context on updates, which the array rejects with an internal error."

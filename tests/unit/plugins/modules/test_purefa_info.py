@@ -44,6 +44,7 @@ from plugins.modules.purefa_info import (
     _pgroup_snapshots_by_name,
     _directory_exports_by_name,
     _saml2sso_dict,
+    _priority_adjustment,
     generate_default_dict,
     generate_perf_dict,
     generate_admin_dict,
@@ -770,8 +771,156 @@ class TestGenerateDelSnapDict:
         assert result["realm::pod::vol.suffix"]["remote"][0]["suffix"] == "suffix"
 
 
+def _null_priority(operator="="):
+    """SDK model for {"priority_adjustment_operator": "=",
+    "priority_adjustment_value": null} (issue 1103): the operator reads, the
+    value raises AttributeError."""
+    pa = Mock(spec=["priority_adjustment_operator"])
+    pa.priority_adjustment_operator = operator
+    return pa
+
+
+def _priority_volume(name, priority_adjustment):
+    """A volume model with every field the volume dicts read set to a plain value."""
+    mock_space = Mock()
+    for attr in (
+        "snapshots",
+        "unique",
+        "virtual",
+        "total_physical",
+        "data_reduction",
+        "total_reduction",
+        "total_provisioned",
+        "thin_provisioning",
+        "snapshots_effective",
+        "unique_effective",
+        "total_effective",
+        "used_provisioned",
+        "total_used",
+    ):
+        setattr(mock_space, attr, 0)
+    mock_vol = Mock()
+    mock_vol.name = name
+    mock_vol.subtype = "regular"
+    mock_vol.provisioned = 10737418240
+    mock_vol.source = None
+    mock_vol.created = 1609459200000
+    mock_vol.serial = "ABCD1234567890EF"
+    mock_vol.time_remaining = 86400000
+    mock_vol.promotion_status = "promoted"
+    mock_vol.requested_promotion_state = "promoted"
+    mock_vol.qos = Mock(bandwidth_limit=0, iops_limit=0)
+    mock_vol.space = mock_space
+    mock_vol.host_encryption_key_status = None
+    mock_vol.priority = 50
+    mock_vol.priority_adjustment = priority_adjustment
+    mock_vol.protocol_endpoint = None
+    mock_vol.context = None
+    return mock_vol
+
+
+def _priority_vgroup(name, priority_adjustment):
+    """A volume group model with every field the vgroup dicts read set to a plain value."""
+    mock_space = Mock()
+    for attr in (
+        "snapshots",
+        "unique",
+        "virtual",
+        "data_reduction",
+        "total_reduction",
+        "total_provisioned",
+        "thin_provisioning",
+        "used_provisioned",
+        "total_used",
+    ):
+        setattr(mock_space, attr, 0)
+    mock_vgroup = Mock()
+    mock_vgroup.name = name
+    mock_vgroup.time_remaining = 86400000
+    mock_vgroup.space = mock_space
+    mock_vgroup.qos = Mock(bandwidth_limit=0, iops_limit=0)
+    mock_vgroup.priority_adjustment = priority_adjustment
+    return mock_vgroup
+
+
+class TestPriorityAdjustment:
+    """Test cases for the _priority_adjustment helper (issue 1103)"""
+
+    def test_null_value_reads_as_unset(self):
+        """Purity//FA 6.12 reports an unset adjustment as "=" with a null value"""
+        vol = Mock()
+        vol.priority_adjustment = _null_priority()
+        assert _priority_adjustment(vol) == ("+", 0)
+
+    def test_explicit_zero_is_a_pin(self):
+        """ "=0" is an explicit pin, distinct from the unset state"""
+        vol = Mock()
+        vol.priority_adjustment = Mock(
+            priority_adjustment_operator="=", priority_adjustment_value=0
+        )
+        assert _priority_adjustment(vol) == ("=", 0)
+
+    def test_older_purity_form_is_unchanged(self):
+        """Older Purity reports the unset state as "+" 0 and keeps the operator"""
+        vol = Mock()
+        vol.priority_adjustment = Mock(
+            priority_adjustment_operator="-", priority_adjustment_value=10
+        )
+        assert _priority_adjustment(vol) == ("-", 10)
+
+    def test_missing_parent_reads_as_unset(self):
+        """A model without a priority_adjustment field reads as unset"""
+        vol = Mock(spec=["name"])
+        assert _priority_adjustment(vol) == ("+", 0)
+
+    def test_null_parent_reads_as_unset(self):
+        """A priority_adjustment of None reads as unset"""
+        vol = Mock()
+        vol.priority_adjustment = None
+        assert _priority_adjustment(vol) == ("+", 0)
+
+
 class TestGenerateDelVolDict:
     """Test cases for generate_del_vol_dict function"""
+
+    def test_generate_del_vol_dict_null_priority_value(self):
+        """A destroyed volume with a null priority_adjustment_value (issue 1103) renders "+0" """
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volumes.return_value = Mock(
+            items=[_priority_volume("deleted_vol", _null_priority())]
+        )
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_del_vol_dict(mock_array)
+
+        assert result["deleted_vol"]["priority"] == 50
+        assert result["deleted_vol"]["priority_adjustment"] == "+0"
+
+    def test_generate_del_vol_dict_priority_bands_forms(self):
+        """A destroyed volume keeps the stored "=" form reported by Purity//FA 6.12"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volumes.return_value = Mock(
+            items=[
+                _priority_volume(
+                    "pinned",
+                    Mock(priority_adjustment_operator="=", priority_adjustment_value=0),
+                ),
+                _priority_volume(
+                    "lowered",
+                    Mock(
+                        priority_adjustment_operator="=", priority_adjustment_value=-10
+                    ),
+                ),
+            ]
+        )
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_del_vol_dict(mock_array)
+
+        assert result["pinned"]["priority_adjustment"] == "=0"
+        assert result["lowered"]["priority_adjustment"] == "=-10"
 
     def test_generate_del_vol_dict_success(self):
         """Test deleted volume dict generation"""
@@ -820,10 +969,67 @@ class TestGenerateDelVolDict:
         result = generate_del_vol_dict(mock_array)
 
         assert "deleted_vol" in result
+        assert result["deleted_vol"]["priority_adjustment"] == "+0"
 
 
 class TestGenerateVolDict:
     """Test cases for generate_vol_dict function"""
+
+    def test_generate_vol_dict_null_priority_value(self):
+        """A volume with a null priority_adjustment_value (issue 1103) renders "+0" """
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volumes.return_value = Mock(
+            items=[_priority_volume("test_vol", _null_priority())]
+        )
+        mock_array.get_connections.return_value = Mock(items=[])
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_vol_dict(mock_array, performance=False)
+
+        assert result["test_vol"]["priority"] == 50
+        assert result["test_vol"]["priority_adjustment"] == "+0"
+
+    def test_generate_vol_dict_priority_bands_forms(self):
+        """A volume keeps the stored "=" form reported by Purity//FA 6.12"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volumes.return_value = Mock(
+            items=[
+                _priority_volume(
+                    "raised",
+                    Mock(
+                        priority_adjustment_operator="=", priority_adjustment_value=10
+                    ),
+                ),
+                _priority_volume(
+                    "pinned",
+                    Mock(priority_adjustment_operator="=", priority_adjustment_value=0),
+                ),
+            ]
+        )
+        mock_array.get_connections.return_value = Mock(items=[])
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_vol_dict(mock_array, performance=False)
+
+        assert result["raised"]["priority_adjustment"] == "=10"
+        assert result["pinned"]["priority_adjustment"] == "=0"
+
+    def test_generate_vol_dict_priority_below_safe_mode_version(self):
+        """Below SAFE_MODE_VERSION the priority keys are not reported at all"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.9"
+        mock_array.get_volumes.return_value = Mock(
+            items=[_priority_volume("old_vol", _null_priority())]
+        )
+        mock_array.get_connections.return_value = Mock(items=[])
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_vol_dict(mock_array, performance=False)
+
+        assert "priority" not in result["old_vol"]
+        assert "priority_adjustment" not in result["old_vol"]
 
     def test_generate_vol_dict_success(self):
         """Test volume dict generation"""
@@ -875,6 +1081,7 @@ class TestGenerateVolDict:
         assert "test_vol" in result
         assert result["test_vol"]["serial"] == "ABCD1234567890EF"
         assert result["test_vol"]["size"] == 10737418240
+        assert result["test_vol"]["priority_adjustment"] == "+10"
 
 
 class TestGenerateHostDict:
@@ -1288,6 +1495,61 @@ class TestGenerateVgroupsDict:
 
         assert "vg1" in result
         assert result["vg1"]["volumes"] == []  # volumes is a list, not volume_count
+        assert result["vg1"]["priority_adjustment"] == "+0"
+
+    def test_generate_vgroups_dict_null_priority_value(self):
+        """A volume group with a null priority_adjustment_value (issue 1103) renders "+0" """
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volume_groups.return_value = Mock(
+            items=[_priority_vgroup("vg1", _null_priority())]
+        )
+        mock_array.get_volume_groups_tags.return_value = Mock(items=[])
+        mock_array.get_volume_groups_volumes.return_value = Mock(items=[])
+
+        result = generate_vgroups_dict(mock_array, performance=False)
+
+        assert result["vg1"]["priority_adjustment"] == "+0"
+
+    def test_generate_vgroups_dict_priority_bands_forms(self):
+        """A volume group keeps the stored "=" form reported by Purity//FA 6.12"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volume_groups.return_value = Mock(
+            items=[
+                _priority_vgroup(
+                    "raised",
+                    Mock(
+                        priority_adjustment_operator="=", priority_adjustment_value=10
+                    ),
+                ),
+                _priority_vgroup(
+                    "pinned",
+                    Mock(priority_adjustment_operator="=", priority_adjustment_value=0),
+                ),
+            ]
+        )
+        mock_array.get_volume_groups_tags.return_value = Mock(items=[])
+        mock_array.get_volume_groups_volumes.return_value = Mock(items=[])
+
+        result = generate_vgroups_dict(mock_array, performance=False)
+
+        assert result["raised"]["priority_adjustment"] == "=10"
+        assert result["pinned"]["priority_adjustment"] == "=0"
+
+    def test_generate_vgroups_dict_without_priority_adjustment(self):
+        """A volume group model without the field reports the unset state"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_vgroup = _priority_vgroup("vg1", None)
+        del mock_vgroup.priority_adjustment
+        mock_array.get_volume_groups.return_value = Mock(items=[mock_vgroup])
+        mock_array.get_volume_groups_tags.return_value = Mock(items=[])
+        mock_array.get_volume_groups_volumes.return_value = Mock(items=[])
+
+        result = generate_vgroups_dict(mock_array, performance=False)
+
+        assert result["vg1"]["priority_adjustment"] == "+0"
 
 
 class TestGenerateDelVgroupsDict:
@@ -1328,6 +1590,42 @@ class TestGenerateDelVgroupsDict:
         result = generate_del_vgroups_dict(mock_array)
 
         assert "deleted_vg" in result
+        assert result["deleted_vg"]["priority_adjustment"] == "+0"
+
+    def test_generate_del_vgroups_dict_null_priority_value(self):
+        """A destroyed volume group with a null priority_adjustment_value (issue 1103) renders "+0" """
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volume_groups.return_value = Mock(
+            items=[_priority_vgroup("deleted_vg", _null_priority())]
+        )
+        mock_array.get_volume_groups_tags.return_value = Mock(items=[])
+        mock_array.get_volume_groups_volumes.return_value = Mock(items=[])
+
+        result = generate_del_vgroups_dict(mock_array)
+
+        assert result["deleted_vg"]["priority_adjustment"] == "+0"
+
+    def test_generate_del_vgroups_dict_priority_bands_forms(self):
+        """A destroyed volume group keeps the stored "=" form reported by Purity//FA 6.12"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volume_groups.return_value = Mock(
+            items=[
+                _priority_vgroup(
+                    "lowered",
+                    Mock(
+                        priority_adjustment_operator="=", priority_adjustment_value=-10
+                    ),
+                )
+            ]
+        )
+        mock_array.get_volume_groups_tags.return_value = Mock(items=[])
+        mock_array.get_volume_groups_volumes.return_value = Mock(items=[])
+
+        result = generate_del_vgroups_dict(mock_array)
+
+        assert result["lowered"]["priority_adjustment"] == "=-10"
 
 
 class TestGenerateAppsDict:
