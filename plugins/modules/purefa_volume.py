@@ -374,6 +374,59 @@ PURE_OUI = "naa.624a9370"
 PRIORITY_API_VERSION = "2.11"
 DEFAULT_API_VERSION = "2.16"
 CONTEXT_API_VERSION = "2.38"
+# From Purity//FA 6.12 the array stores every priority adjustment with the
+# "=" operator (QoS priority bands) and reports an unset one as "=" with a
+# null value. This depends on the Purity release, not on the REST version
+# the client negotiated: an older py-pure-client talking an older REST
+# version to a 6.12 array still gets the new form.
+PRIORITY_BANDS_PURITY_VERSION = "6.12.0"
+
+
+def _priority_adjustment(obj):
+    """Return (operator, value) of an object's priority adjustment.
+
+    Both fields are read with a default: Purity//FA 6.12 reports an unset
+    adjustment as operator "=" with a null value, and the SDK raises
+    AttributeError when a null field is read. An unset adjustment is
+    reported as ("+", 0), which is how older Purity reports the same state,
+    so the module's output does not change between releases.
+    """
+    adjustment = getattr(obj, "priority_adjustment", None)
+    operator = getattr(adjustment, "priority_adjustment_operator", None)
+    value = getattr(adjustment, "priority_adjustment_value", None)
+    if value is None:
+        return "+", 0
+    return operator or "+", value
+
+
+def _priority_bands(array):
+    """True when the array stores priority adjustments as QoS priority bands.
+
+    Decided by the array's Purity release (see PRIORITY_BANDS_PURITY_VERSION).
+    Anything that stops the release being read leaves the comparison in its
+    pre-6.12 form, which at worst reports a change that is already in place.
+    """
+    try:
+        version = list(array.get_arrays().items)[0].version
+        return LooseVersion(PRIORITY_BANDS_PURITY_VERSION) <= LooseVersion(version)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+
+
+def _stored_priority(operator, value, bands):
+    """The form the array will store an adjustment in, for comparison.
+
+    A relative 0 ("+0" or "-0") is the unset state on every release. With
+    QoS priority bands (``bands`` true, Purity//FA 6.12 and later) the array
+    keeps only the "=" operator, so a relative adjustment is stored as the
+    signed absolute value: "+10" as "=10", "-10" as "=-10". "=0" stays a
+    distinct explicit pin.
+    """
+    if operator in ("+", "-") and value == 0:
+        return "+", 0
+    if operator in ("+", "-") and bands:
+        return "=", -value if operator == "-" else value
+    return operator, value
 
 
 def _volfact(module, array, volume_name):
@@ -404,12 +457,10 @@ def _volfact(module, array, volume_name):
             }
         }
         if LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version):
-            volfact[volume_name][
-                "priority_operator"
-            ] = volume_data.priority_adjustment.priority_adjustment_operator
-            volfact[volume_name][
-                "priority_value"
-            ] = volume_data.priority_adjustment.priority_adjustment_value
+            (
+                volfact[volume_name]["priority_operator"],
+                volfact[volume_name]["priority_value"],
+            ) = _priority_adjustment(volume_data)
         if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
             volfact[volume_name]["context"] = volume_data.context.name
     else:
@@ -1001,11 +1052,10 @@ def create_multi_volume(module, array, single=False):
                     count
                 ].promotion_status
             if module.params["priority_operator"]:
-                adj = prio_temp[count].priority_adjustment
-                volfact[vol_name][
-                    "priority_operator"
-                ] = adj.priority_adjustment_operator
-                volfact[vol_name]["priority_value"] = adj.priority_adjustment_value
+                (
+                    volfact[vol_name]["priority_operator"],
+                    volfact[vol_name]["priority_value"],
+                ) = _priority_adjustment(prio_temp[count])
 
     module.exit_json(changed=changed, volume=volfact)
 
@@ -1196,39 +1246,26 @@ def update_volume(module, array):
                     f"Failed to change promotion status for volume {module.params['name']}",
                 )
     if module.params["priority_operator"]:
-        change_prio = False
-        if (
-            module.params["priority_operator"]
-            != vol.priority_adjustment.priority_adjustment_operator
-        ):
-            change_prio = True
-            newop = module.params["priority_operator"]
-        else:
-            newop = vol.priority_adjustment.priority_adjustment_operator
-        if (
-            module.params["priority_value"]
-            and module.params["priority_value"]
-            != vol.priority_adjustment.priority_adjustment_value
-        ):
-            change_prio = True
-            newval = module.params["priority_value"]
-        elif (
-            not module.params["priority_value"]
-            and vol.priority_adjustment.priority_adjustment_value != 0
-        ):
-            change_prio = True
-            newval = 0
-        else:
-            newval = vol.priority_adjustment.priority_adjustment_value
-        volumepatch = VolumePatch(
-            priority_adjustment=PriorityAdjustment(
-                priority_adjustment_operator=newop,
-                priority_adjustment_value=newval,
-            )
-        )
-        if change_prio:
+        # Compare the form the array will store the request in with the
+        # form it stores the current adjustment in, so "+10" on an array
+        # that already holds "=10" is not reported as a change. A missing
+        # value (required_together normally guarantees one) means 0.
+        requested_operator = module.params["priority_operator"]
+        requested_value = module.params["priority_value"]
+        if requested_value is None:
+            requested_value = 0
+        bands = _priority_bands(array)
+        requested_prio = _stored_priority(requested_operator, requested_value, bands)
+        current_prio = _stored_priority(*_priority_adjustment(vol), bands)
+        if requested_prio != current_prio:
             changed = True
             if not module.check_mode:
+                volumepatch = VolumePatch(
+                    priority_adjustment=PriorityAdjustment(
+                        priority_adjustment_operator=requested_operator,
+                        priority_adjustment_value=requested_value,
+                    )
+                )
                 prio_res = patch_with_context(
                     array,
                     "patch_volumes",

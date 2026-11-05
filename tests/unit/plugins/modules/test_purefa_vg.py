@@ -55,6 +55,9 @@ from plugins.modules.purefa_vg import (
     delete_vgroup,
     eradicate_vgroup,
     recover_vgroup,
+    _priority_adjustment,
+    _priority_bands,
+    _stored_priority,
 )
 import plugins.modules.purefa_vg as _vg_module
 
@@ -72,6 +75,15 @@ _vg_module.get_with_context = _passthrough_with_context
 _vg_module.post_with_context = _passthrough_with_context
 _vg_module.patch_with_context = _passthrough_with_context
 _vg_module.delete_with_context = _passthrough_with_context
+
+
+def _null_priority(operator="="):
+    """SDK model for {"priority_adjustment_operator": "=",
+    "priority_adjustment_value": null} (issue 1103): the operator reads, the
+    value raises AttributeError."""
+    pa = Mock(spec=["priority_adjustment_operator"])
+    pa.priority_adjustment_operator = operator
+    return pa
 
 
 class TestRenameExists:
@@ -1331,3 +1343,267 @@ class TestQaFixes:
         get_multi_vgroups(mock_module, mock_array)
 
         assert mock_array.get_volume_groups.call_args[1]["names"] == ["vg00", "vg01"]
+
+
+class TestPriorityNullValue:
+    """Regression tests for issue 1103: Purity//FA 6.12 (REST 2.59) reports
+    an unset priority adjustment as operator "=" with a null value, and the
+    SDK raises AttributeError when the null field is read."""
+
+    @staticmethod
+    def _module(operator, value, check_mode=False):
+        mock_module = Mock()
+        mock_module.check_mode = check_mode
+        mock_module.params = {
+            "name": "test-vg",
+            "context": "",
+            "bw_qos": None,
+            "iops_qos": None,
+            "priority_operator": operator,
+            "priority_value": value,
+        }
+        return mock_module
+
+    @staticmethod
+    def _array(api_version, priority_adjustment):
+        mock_vg = Mock()
+        mock_vg.priority_adjustment = priority_adjustment
+        mock_vg.qos = Mock(bandwidth_limit=549755813888, iops_limit=100000000)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = api_version
+        # The array's Purity release decides the comparison form, not the
+        # negotiated REST version: 2.59 stands for a 6.12 array here.
+        purity = "6.12.4" if api_version == "2.59" else "6.10.6"
+        mock_array.get_arrays.return_value = Mock(items=[Mock(version=purity)])
+        mock_array.get_volume_groups.return_value = Mock(
+            status_code=200, items=[mock_vg]
+        )
+        mock_array.patch_volume_groups.return_value = Mock(status_code=200)
+        return mock_array
+
+    @staticmethod
+    def _explicit(operator, value):
+        return Mock(
+            priority_adjustment_operator=operator, priority_adjustment_value=value
+        )
+
+    def test_null_priority_model_raises_like_the_sdk(self):
+        """The test model reproduces the SDK: operator reads, value raises"""
+        pa = _null_priority()
+        assert pa.priority_adjustment_operator == "="
+        try:
+            pa.priority_adjustment_value
+        except AttributeError:
+            pass
+        else:
+            raise AssertionError("value read should raise AttributeError")
+
+    def test_priority_adjustment_helper(self):
+        """Null value reads as the unset state; explicit values pass through"""
+        vg = Mock()
+        vg.priority_adjustment = _null_priority()
+        assert _priority_adjustment(vg) == ("+", 0)
+        vg.priority_adjustment = self._explicit("=", 10)
+        assert _priority_adjustment(vg) == ("=", 10)
+        vg.priority_adjustment = self._explicit("=", 0)
+        assert _priority_adjustment(vg) == ("=", 0)
+        vg.priority_adjustment = self._explicit("-", 10)
+        assert _priority_adjustment(vg) == ("-", 10)
+        # a missing parent is the unset state too
+        assert _priority_adjustment(Mock(spec=[])) == ("+", 0)
+        assert _priority_adjustment(None) == ("+", 0)
+
+    def test_stored_priority_helper(self):
+        """Relative zero is unset everywhere; priority bands fold +/- into "=" """
+        assert _stored_priority("+", 0, False) == ("+", 0)
+        assert _stored_priority("-", 0, True) == ("+", 0)
+        assert _stored_priority("+", 10, False) == ("+", 10)
+        assert _stored_priority("-", 10, False) == ("-", 10)
+        assert _stored_priority("+", 10, True) == ("=", 10)
+        assert _stored_priority("-", 10, True) == ("=", -10)
+        assert _stored_priority("=", 0, True) == ("=", 0)
+        assert _stored_priority("=", 10, False) == ("=", 10)
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_priority_bands_follows_the_purity_release(self, mock_lv):
+        """Decided by the Purity release the array reports, not by the REST
+        version the client negotiated (an old SDK talks 2.57 to a 6.12 array)"""
+        array = Mock()
+        array.get_rest_version.return_value = "2.57"
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.12.4")])
+        assert _priority_bands(array) is True
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.12.0")])
+        assert _priority_bands(array) is True
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.10.6")])
+        assert _priority_bands(array) is False
+        # an unreadable release keeps the pre-6.12 comparison
+        array.get_arrays.return_value = Mock(items=[])
+        assert _priority_bands(array) is False
+        array.get_arrays.side_effect = TypeError
+        assert _priority_bands(array) is False
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_bare_present_with_null_priority_does_not_raise(self, mock_lv):
+        """Bare state=present on a 6.12 vgroup with a null priority value
+        neither raises nor patches"""
+        mock_module = self._module(None, None)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_zero_vs_null_is_noop(self, mock_lv):
+        """Requested +0 against an unset (null) adjustment is unchanged"""
+        mock_module = self._module("+", 0)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_ten_vs_stored_equals_ten_on_259_is_noop(self, mock_lv):
+        """Requested +10 against the array's stored form =10 on 2.59 is
+        unchanged: the second run of a playbook does not patch"""
+        mock_module = self._module("+", 10)
+        mock_array = self._array("2.59", self._explicit("=", 10))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_minus_ten_vs_stored_equals_minus_ten_on_259_is_noop(self, mock_lv):
+        """Requested -10 against the stored form =-10 on 2.59 is unchanged"""
+        mock_module = self._module("-", 10)
+        mock_array = self._array("2.59", self._explicit("=", -10))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_ten_vs_equals_ten_on_254_is_a_change(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        """Below 2.59 the array keeps the operator, so +10 vs =10 differs"""
+        mock_module = self._module("+", 10)
+        mock_array = self._array("2.54", self._explicit("=", 10))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_prio.assert_called_once_with(
+            priority_adjustment_operator="+", priority_adjustment_value=10
+        )
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_ten_vs_null_patches_the_request(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        """Requested +10 against an unset (null) adjustment is a change and
+        the PATCH body is built from the request, never from the null"""
+        mock_module = self._module("+", 10)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_prio.assert_called_once_with(
+            priority_adjustment_operator="+", priority_adjustment_value=10
+        )
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_explicit_zero_vs_null_is_a_change(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        """An explicit "=0" pin is distinct from the unset (null) state, so
+        requesting it against null is a change sent as given"""
+        mock_module = self._module("=", 0)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_prio.assert_called_once_with(
+            priority_adjustment_operator="=", priority_adjustment_value=0
+        )
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_without_context_sends_no_context_names(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        """An empty context must not be sent: the array answers an empty
+        context_names with a 500 'Unidentified internal error'"""
+        mock_module = self._module("+", 10)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        kwargs = mock_array.patch_volume_groups.call_args[1]
+        assert kwargs["names"] == ["test-vg"]
+        assert "context_names" not in kwargs
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_with_context_sends_context_names(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        mock_module = self._module("+", 10)
+        mock_module.params["context"] = "member-array"
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        kwargs = mock_array.patch_volume_groups.call_args[1]
+        assert kwargs["context_names"] == ["member-array"]
+
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_ten_vs_null_check_mode(self, mock_lv, mock_prio):
+        """Check mode reports the change without patching"""
+        mock_module = self._module("+", 10, check_mode=True)
+        mock_array = self._array("2.59", _null_priority())
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_prio.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.PriorityAdjustment")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_update_plus_zero_vs_stored_ten_on_259_resets(
+        self, mock_lv, mock_prio, mock_check_response
+    ):
+        """Requested +0 against a stored =10 on 2.59 clears the adjustment
+        with the request as given"""
+        mock_module = self._module("+", 0)
+        mock_array = self._array("2.59", self._explicit("=", 10))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_prio.assert_called_once_with(
+            priority_adjustment_operator="+", priority_adjustment_value=0
+        )
+        mock_module.exit_json.assert_called_once_with(changed=True)

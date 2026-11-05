@@ -154,6 +154,23 @@ def _is_cbs(array):
     return is_cbs
 
 
+def _priority_adjustment(obj):
+    """Return (operator, value) of an object's priority adjustment.
+
+    Both fields are read with a default: Purity//FA 6.12 reports an unset
+    adjustment as operator "=" with a null value, and the SDK raises
+    AttributeError when a null field is read. An unset adjustment is
+    reported as ("+", 0), which is how older Purity reports the same state,
+    so the module's output does not change between releases.
+    """
+    adjustment = getattr(obj, "priority_adjustment", None)
+    operator = getattr(adjustment, "priority_adjustment_operator", None)
+    value = getattr(adjustment, "priority_adjustment_value", None)
+    if value is None:
+        return "+", 0
+    return operator or "+", value
+
+
 def generate_default_dict(array):
     default_info = {}
     api_version = array.get_rest_version()
@@ -1906,11 +1923,9 @@ def generate_del_vol_dict(array):
         }
         if LooseVersion(SAFE_MODE_VERSION) <= LooseVersion(array.get_rest_version()):
             volume_info[volume]["subtype"] = vol.subtype
-            volume_info[volume]["priority"] = vol.priority
-            volume_info[volume]["priority_adjustment"] = (
-                vol.priority_adjustment.priority_adjustment_operator
-                + str(vol.priority_adjustment.priority_adjustment_value)
-            )
+            volume_info[volume]["priority"] = getattr(vol, "priority", None)
+            operator, value = _priority_adjustment(vol)
+            volume_info[volume]["priority_adjustment"] = operator + str(value)
         if LooseVersion(SHARED_CAP_API_VERSION) <= LooseVersion(
             array.get_rest_version()
         ):
@@ -2003,11 +2018,9 @@ def generate_vol_dict(array, performance):
         if LooseVersion(SUBS_API_VERSION) <= LooseVersion(array.get_rest_version()):
             volume_info[volume]["total_used"] = getattr(vol.space, "total_used", None)
         if LooseVersion(SAFE_MODE_VERSION) <= LooseVersion(array.get_rest_version()):
-            volume_info[volume]["priority"] = vol.priority
-            volume_info[volume]["priority_adjustment"] = (
-                vol.priority_adjustment.priority_adjustment_operator
-                + str(vol.priority_adjustment.priority_adjustment_value)
-            )
+            volume_info[volume]["priority"] = getattr(vol, "priority", None)
+            operator, value = _priority_adjustment(vol)
+            volume_info[volume]["priority_adjustment"] = operator + str(value)
         connections = list(array.get_connections(volume_names=[vol.name]).items)
         voldict = {}
         for connection in connections:
@@ -2840,11 +2853,8 @@ def generate_vgroups_dict(array, performance):
             "total_used": getattr(vgroup.space, "total_used", None),
             "tags": [],
         }
-        if hasattr(vgroup, "priority_adjustment"):
-            vgroups_info[name]["priority_adjustment"] = (
-                vgroup.priority_adjustment.priority_adjustment_operator
-                + str(vgroup.priority_adjustment.priority_adjustment_value)
-            )
+        operator, value = _priority_adjustment(vgroup)
+        vgroups_info[name]["priority_adjustment"] = operator + str(value)
     if LooseVersion(TAGS_API_VERSION) <= LooseVersion(array.get_rest_version()):
         vgroup_tags = list(array.get_volume_groups_tags(resource_destroyed=False).items)
         for tag in vgroup_tags:
@@ -2946,11 +2956,8 @@ def generate_del_vgroups_dict(array):
             "total_used": getattr(vgroup.space, "total_used", None),
             "tags": [],
         }
-        if hasattr(vgroup, "priority_adjustment"):
-            vgroups_info[name]["priority_adjustment"] = (
-                vgroup.priority_adjustment.priority_adjustment_operator
-                + str(vgroup.priority_adjustment.priority_adjustment_value)
-            )
+        operator, value = _priority_adjustment(vgroup)
+        vgroups_info[name]["priority_adjustment"] = operator + str(value)
     vg_volumes = list(array.get_volume_groups_volumes().items)
     for vg_vol in vg_volumes:
         group_name = vg_vol.group.name

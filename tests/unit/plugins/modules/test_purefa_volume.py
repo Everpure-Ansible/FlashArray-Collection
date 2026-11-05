@@ -83,6 +83,9 @@ from plugins.modules.purefa_volume import (
     rename_volume,
     _create_nguid,
     _volfact,
+    _priority_adjustment,
+    _priority_bands,
+    _stored_priority,
     move_volume,
     get_pod,
     check_pod,
@@ -6712,3 +6715,349 @@ class TestQaFixes:
 
         mock_update_volume.assert_called_once()
         mock_copy_from_volume.assert_not_called()
+
+
+def _null_priority(operator="="):
+    """SDK model for {"priority_adjustment_operator": "=",
+    "priority_adjustment_value": null} (issue 1103): the operator reads, the
+    value raises AttributeError."""
+    pa = Mock(spec=["priority_adjustment_operator"])
+    pa.priority_adjustment_operator = operator
+    return pa
+
+
+def _set_priority(operator, value):
+    """SDK model for a populated priority adjustment."""
+    pa = Mock()
+    pa.priority_adjustment_operator = operator
+    pa.priority_adjustment_value = value
+    return pa
+
+
+class TestPriorityHelpers:
+    """Direct tests of the issue 1103 priority helpers"""
+
+    def test_null_priority_model_raises_on_value(self):
+        """The test double behaves like the SDK: value read raises"""
+        import pytest
+
+        with pytest.raises(AttributeError):
+            _null_priority().priority_adjustment_value
+
+    def test_priority_adjustment_null_value_is_unset(self):
+        vol = Mock()
+        vol.priority_adjustment = _null_priority()
+        assert _priority_adjustment(vol) == ("+", 0)
+
+    def test_priority_adjustment_missing_parent_is_unset(self):
+        vol = Mock(spec=["name"])
+        assert _priority_adjustment(vol) == ("+", 0)
+
+    def test_priority_adjustment_populated(self):
+        vol = Mock()
+        vol.priority_adjustment = _set_priority("=", -10)
+        assert _priority_adjustment(vol) == ("=", -10)
+        vol.priority_adjustment = _set_priority("+", 10)
+        assert _priority_adjustment(vol) == ("+", 10)
+
+    def test_stored_priority_relative_zero_is_unset(self):
+        for bands in (False, True):
+            assert _stored_priority("+", 0, bands) == ("+", 0)
+            assert _stored_priority("-", 0, bands) == ("+", 0)
+
+    def test_stored_priority_bands_normalise_relative(self):
+        assert _stored_priority("+", 10, True) == ("=", 10)
+        assert _stored_priority("-", 10, True) == ("=", -10)
+        assert _stored_priority("=", 0, True) == ("=", 0)
+        assert _stored_priority("=", 10, True) == ("=", 10)
+
+    def test_stored_priority_pre_bands_unchanged(self):
+        assert _stored_priority("+", 10, False) == ("+", 10)
+        assert _stored_priority("-", 10, False) == ("-", 10)
+        assert _stored_priority("=", 0, False) == ("=", 0)
+
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    def test_priority_bands_follows_the_purity_release(self, mock_lv):
+        """Decided by the Purity release the array reports, not by the REST
+        version the client negotiated (an old SDK talks 2.57 to a 6.12 array)"""
+        array = Mock()
+        array.get_rest_version.return_value = "2.57"
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.12.4")])
+        assert _priority_bands(array) is True
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.12.0")])
+        assert _priority_bands(array) is True
+        array.get_arrays.return_value = Mock(items=[Mock(version="6.10.6")])
+        assert _priority_bands(array) is False
+        # an unreadable release keeps the pre-6.12 comparison
+        array.get_arrays.return_value = Mock(items=[])
+        assert _priority_bands(array) is False
+        array.get_arrays.side_effect = TypeError
+        assert _priority_bands(array) is False
+
+
+class TestVolfactNullPriority:
+    """_volfact against a Purity//FA 6.12 payload (issue 1103)"""
+
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    def test_volfact_null_priority_value_reports_unset(self, mock_lv):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {"context": ""}
+
+        mock_vol = Mock()
+        mock_vol.provisioned = 1073741824
+        mock_vol.serial = "ABC123DEF456GHI"
+        mock_vol.created = 1700000000000
+        mock_vol.qos = Mock()
+        mock_vol.qos.iops_limit = 100000
+        mock_vol.qos.bandwidth_limit = 1073741824
+        mock_vol.requested_promotion_state = "promoted"
+        mock_vol.promotion_status = "promoted"
+        mock_vol.priority = 50
+        mock_vol.destroyed = False
+        mock_vol.priority_adjustment = _null_priority()
+        mock_vol.context = Mock()
+        mock_vol.context.name = "array1"
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
+
+        result = _volfact(mock_module, mock_array, "test_volume")
+
+        assert result["test_volume"]["priority_operator"] == "+"
+        assert result["test_volume"]["priority_value"] == 0
+        assert result["test_volume"]["priority"] == 50
+
+
+class TestUpdateVolumePriorityBands:
+    """update_volume priority comparison across Purity releases (issue 1103)"""
+
+    @staticmethod
+    def _setup(operator, value, current_adjustment, api_version):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "test-vol",
+            "size": None,
+            "bw_qos": None,
+            "iops_qos": None,
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": operator,
+            "priority_value": value,
+            "context": "",
+        }
+
+        mock_vol = Mock()
+        mock_vol.provisioned = 1073741824
+        mock_vol.qos = Mock()
+        mock_vol.qos.bandwidth_limit = 549755813888
+        mock_vol.qos.iops_limit = 100000000
+        mock_vol.priority_adjustment = current_adjustment
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = api_version
+        # The array's Purity release decides the comparison form, not the
+        # negotiated REST version: 2.59 stands for a 6.12 array here.
+        purity = "6.12.4" if api_version == "2.59" else "6.10.6"
+        mock_array.get_arrays.return_value = Mock(items=[Mock(version=purity)])
+        mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
+        mock_array.patch_volumes.return_value = Mock(status_code=200)
+        return mock_module, mock_array
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_unset_request_against_null_is_no_change(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """requested ("+", 0) vs current null -> changed False, no crash"""
+        mock_volfact.return_value = {"test-vol": {}}
+        mock_module, mock_array = self._setup("+", 0, _null_priority(), "2.59")
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_prio_adj.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_explicit_zero_against_null_is_change(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """requested ("=", 0) vs current null -> changed True (a pin, not unset)"""
+        mock_volfact.return_value = {"test-vol": {}}
+        mock_module, mock_array = self._setup("=", 0, _null_priority(), "2.59")
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_called_once()
+        mock_prio_adj.assert_called_once_with(
+            priority_adjustment_operator="=", priority_adjustment_value=0
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_relative_against_normalised_on_bands_is_no_change(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """requested ("+", 10) vs current ("=", 10) on 2.59 -> changed False, no PATCH"""
+        mock_volfact.return_value = {"test-vol": {}}
+        mock_module, mock_array = self._setup("+", 10, _set_priority("=", 10), "2.59")
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_prio_adj.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is False
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_relative_against_equals_pre_bands_is_change(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """requested ("+", 10) vs current ("=", 10) on 2.54 -> changed True"""
+        mock_volfact.return_value = {"test-vol": {}}
+        mock_module, mock_array = self._setup("+", 10, _set_priority("=", 10), "2.54")
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_called_once()
+        mock_prio_adj.assert_called_once_with(
+            priority_adjustment_operator="+", priority_adjustment_value=10
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_relative_against_null_patches_request_as_given(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """requested ("+", 10) vs current null -> changed True, PATCH body from request"""
+        mock_volfact.return_value = {"test-vol": {}}
+        mock_module, mock_array = self._setup("+", 10, _null_priority(), "2.59")
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_called_once()
+        mock_prio_adj.assert_called_once_with(
+            priority_adjustment_operator="+", priority_adjustment_value=10
+        )
+        mock_vol_patch.assert_called_once_with(
+            priority_adjustment=mock_prio_adj.return_value
+        )
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact")
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_change_in_check_mode_does_not_patch(
+        self, mock_prio_adj, mock_vol_patch, mock_lv, mock_check_response, mock_volfact
+    ):
+        """check_mode reports the change without a PATCH"""
+        mock_volfact.return_value = {}
+        mock_module, mock_array = self._setup("+", 10, _null_priority(), "2.59")
+        mock_module.check_mode = True
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+
+class TestCreateMultiVolumeNullPriority:
+    """create_multi_volume reads the PATCH echo of a 6.12 array (issue 1103)"""
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.check_vgroup")
+    @patch("plugins.modules.purefa_volume.check_pod")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.VolumePatch")
+    @patch("plugins.modules.purefa_volume.PriorityAdjustment")
+    def test_create_multi_volume_null_priority_echo(
+        self,
+        mock_prio_adj,
+        mock_volume_patch,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_human_to_bytes,
+        mock_check_response,
+    ):
+        mock_human_to_bytes.return_value = 1073741824
+        mock_check_vgroup.return_value = True
+        mock_check_pod.return_value = True
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "vol",
+            "size": "1G",
+            "count": 2,
+            "start": 0,
+            "digits": 2,
+            "suffix": "",
+            "bw_qos": None,
+            "iops_qos": None,
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": "+",
+            "priority_value": 0,
+            "with_default_protection": True,
+            "context": "",
+        }
+
+        created = []
+        echoed = []
+        for i in range(2):
+            item = Mock()
+            item.name = f"vol0{i}"
+            item.provisioned = 1073741824
+            item.serial = f"SERIAL000{i}"
+            item.created = 1700000000000
+            created.append(item)
+            echo = Mock()
+            echo.name = item.name
+            echo.priority_adjustment = _null_priority()
+            echoed.append(echo)
+
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array_item = Mock()
+        mock_array_item.name = "array1"
+        mock_array.get_arrays.return_value = Mock(items=[mock_array_item])
+        mock_array.post_volumes.return_value = Mock(status_code=200, items=created)
+        mock_array.patch_volumes.return_value = Mock(status_code=200, items=echoed)
+
+        create_multi_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_called_once()
+        mock_module.exit_json.assert_called_once()
+        volfact = mock_module.exit_json.call_args[1]["volume"]
+        for name in ("vol00", "vol01"):
+            assert volfact[name]["priority_operator"] == "+"
+            assert volfact[name]["priority_value"] == 0

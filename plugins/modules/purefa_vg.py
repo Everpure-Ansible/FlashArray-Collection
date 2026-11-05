@@ -221,10 +221,63 @@ from ansible_collections.everpure.flasharray.plugins.module_utils.api_helpers im
 
 PRIORITY_API_VERSION = "2.11"
 CONTEXT_API_VERSION = "2.38"
+# From Purity//FA 6.12 the array stores every priority adjustment with the
+# "=" operator (QoS priority bands) and reports an unset one as "=" with a
+# null value. This depends on the Purity release, not on the REST version
+# the client negotiated: an older py-pure-client talking an older REST
+# version to a 6.12 array still gets the new form.
+PRIORITY_BANDS_PURITY_VERSION = "6.12.0"
 MIN_BWS = 1048576
 MIN_IOPS = 100
 MAX_BWS = 549755813888
 MAX_IOPS = 100000000
+
+
+def _priority_adjustment(obj):
+    """Return (operator, value) of an object's priority adjustment.
+
+    Both fields are read with a default: Purity//FA 6.12 reports an unset
+    adjustment as operator "=" with a null value, and the SDK raises
+    AttributeError when a null field is read. An unset adjustment is
+    reported as ("+", 0), which is how older Purity reports the same state,
+    so the module's output does not change between releases.
+    """
+    adjustment = getattr(obj, "priority_adjustment", None)
+    operator = getattr(adjustment, "priority_adjustment_operator", None)
+    value = getattr(adjustment, "priority_adjustment_value", None)
+    if value is None:
+        return "+", 0
+    return operator or "+", value
+
+
+def _priority_bands(array):
+    """True when the array stores priority adjustments as QoS priority bands.
+
+    Decided by the array's Purity release (see PRIORITY_BANDS_PURITY_VERSION).
+    Anything that stops the release being read leaves the comparison in its
+    pre-6.12 form, which at worst reports a change that is already in place.
+    """
+    try:
+        version = list(array.get_arrays().items)[0].version
+        return LooseVersion(PRIORITY_BANDS_PURITY_VERSION) <= LooseVersion(version)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+
+
+def _stored_priority(operator, value, bands):
+    """The form the array will store an adjustment in, for comparison.
+
+    A relative 0 ("+0" or "-0") is the unset state on every release. With
+    QoS priority bands (``bands`` true, Purity//FA 6.12 and later) the array
+    keeps only the "=" operator, so a relative adjustment is stored as the
+    signed absolute value: "+10" as "=10", "-10" as "=-10". "=0" stays a
+    distinct explicit pin.
+    """
+    if operator in ("+", "-") and value == 0:
+        return "+", 0
+    if operator in ("+", "-") and bands:
+        return "=", -value if operator == "-" else value
+    return operator, value
 
 
 def rename_exists(module, array):
@@ -512,43 +565,45 @@ def update_vgroup(module, array):
     )[0]
 
     kwargs = {"names": [module.params["name"]]}
-    if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
+    # Only name a fleet context when the task gave one: the array answers
+    # an empty context_names with a 500 "Unidentified internal error".
+    if (
+        LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version)
+        and module.params["context"]
+    ):
         kwargs["context_names"] = [module.params["context"]]
 
     # ---------- Priority Adjustment ----------
-    if LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version):
-        vg_prio = vg_all.priority_adjustment
-        new_operator = vg_prio.priority_adjustment_operator
-        new_value = vg_prio.priority_adjustment_value
-
-        if (
-            module.params.get("priority_operator") is not None
-            and vg_prio.priority_adjustment_operator
-            != module.params["priority_operator"]
-        ):
-            new_operator = module.params["priority_operator"]
+    if (
+        LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version)
+        and module.params.get("priority_operator") is not None
+        and module.params.get("priority_value") is not None
+    ):
+        # Compare in the form the array stores: Purity//FA 6.12 keeps every
+        # adjustment under the "=" operator and reports an unset one as "="
+        # with a null value (issue 1103).
+        bands = _priority_bands(array)
+        requested = _stored_priority(
+            module.params["priority_operator"],
+            module.params["priority_value"],
+            bands,
+        )
+        current = _stored_priority(*_priority_adjustment(vg_all), bands)
+        if requested != current:
             changed = True
-
-        if (
-            module.params.get("priority_value") is not None
-            and vg_prio.priority_adjustment_value != module.params["priority_value"]
-        ):
-            new_value = module.params["priority_value"]
-            changed = True
-
-        if changed and not module.check_mode:
-            volume_group = VolumeGroupPatch(
-                priority_adjustment=PriorityAdjustment(
-                    priority_adjustment_operator=new_operator,
-                    priority_adjustment_value=new_value,
+            if not module.check_mode:
+                volume_group = VolumeGroupPatch(
+                    priority_adjustment=PriorityAdjustment(
+                        priority_adjustment_operator=module.params["priority_operator"],
+                        priority_adjustment_value=module.params["priority_value"],
+                    )
                 )
-            )
-            res = array.patch_volume_groups(**kwargs, volume_group=volume_group)
-            check_response(
-                res,
-                module,
-                f"Failed to change DMM Priority for volume group {module.params['name']}",
-            )
+                res = array.patch_volume_groups(**kwargs, volume_group=volume_group)
+                check_response(
+                    res,
+                    module,
+                    f"Failed to change DMM Priority for volume group {module.params['name']}",
+                )
 
     # ---------- QoS ----------
     vg_qos = vg_all.qos
