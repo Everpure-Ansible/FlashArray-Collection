@@ -1,0 +1,5 @@
+minor_changes:
+  - "purefa_vg - ``priority_operator`` accepts ``=`` and ``priority_value`` accepts ``-10`` on Purity//FA 6.12 and later."
+bugfixes:
+  - "purefa_volume - creating a volume with ``promotion_state`` and no ``priority_operator`` no longer fails with ``UnboundLocalError``."
+  - "purefa_volume - a failed promotion of newly created volumes now fails the task instead of warning after the volumes were removed."

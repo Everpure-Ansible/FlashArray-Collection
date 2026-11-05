@@ -991,11 +991,14 @@ def create_multi_volume(module, array, single=False):
                     volume=VolumePatch(destroyed=True),
                 )
                 array.delete_volumes(names=names)
-                module.warn(
-                    "Failed to set promotion status on volumes. Error: {0}".format(
+                # The volumes are gone again, so this is a failure, not a
+                # warning on a successful run
+                module.fail_json(
+                    msg="Failed to set promotion status on volumes. Error: {0}".format(
                         prom_res.errors[0].message
                     )
                 )
+            prom_temp = list(prom_res.items)
         if module.params["priority_operator"]:
             volume = VolumePatch(
                 priority_adjustment=PriorityAdjustment(
@@ -1048,7 +1051,9 @@ def create_multi_volume(module, array, single=False):
             if module.params["iops_qos"]:
                 volfact[vol_name]["iops_limit"] = item.qos.iops_limit
             if module.params["promotion_state"]:
-                volfact[vol_name]["promotion_status"] = prio_temp[
+                # From the promotion PATCH response, not the priority one:
+                # a task may set promotion_state without priority_operator
+                volfact[vol_name]["promotion_status"] = prom_temp[
                     count
                 ].promotion_status
             if module.params["priority_operator"]:
