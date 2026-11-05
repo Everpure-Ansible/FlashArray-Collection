@@ -1,13 +1,5 @@
 minor_changes:
-  - purefa_vg - ``priority_operator`` accepts ``=`` and ``priority_value``
-    accepts ``-10``, so a volume group can be given an absolute priority on
-    Purity//FA 6.12 and later, which stores every adjustment in that form.
-    Older releases do not accept ``=`` for a volume group and the module
-    says so before anything is sent; ``-10`` is only valid with ``=``.
+  - "purefa_vg - ``priority_operator`` accepts ``=`` and ``priority_value`` accepts ``-10`` on Purity//FA 6.12 and later."
 bugfixes:
-  - purefa_volume - creating a volume with ``promotion_state`` but no
-    ``priority_operator`` failed with ``UnboundLocalError`` after the volume
-    had been created, on REST 2.16 and later and for every ``count`` create.
-  - purefa_volume - when the promotion of newly created volumes failed, the
-    module removed the volumes again but reported success with a warning.
-    It now fails the task.
+  - "purefa_volume - creating a volume with ``promotion_state`` and no ``priority_operator`` no longer fails with ``UnboundLocalError``."
+  - "purefa_volume - a failed promotion of newly created volumes now fails the task instead of warning after the volumes were removed."
