@@ -1909,7 +1909,7 @@ def generate_del_vol_dict(array):
             volume_info[volume]["priority"] = vol.priority
             volume_info[volume]["priority_adjustment"] = (
                 vol.priority_adjustment.priority_adjustment_operator
-                + str(vol.priority_adjustment.priority_adjustment_value)
+                + str(getattr(vol.priority_adjustment, "priority_adjustment_value", 0))
             )
         if LooseVersion(SHARED_CAP_API_VERSION) <= LooseVersion(
             array.get_rest_version()
@@ -2006,7 +2006,7 @@ def generate_vol_dict(array, performance):
             volume_info[volume]["priority"] = vol.priority
             volume_info[volume]["priority_adjustment"] = (
                 vol.priority_adjustment.priority_adjustment_operator
-                + str(vol.priority_adjustment.priority_adjustment_value)
+                + str(getattr(vol.priority_adjustment, "priority_adjustment_value", 0))
             )
         connections = list(array.get_connections(volume_names=[vol.name]).items)
         voldict = {}
@@ -2843,7 +2843,9 @@ def generate_vgroups_dict(array, performance):
         if hasattr(vgroup, "priority_adjustment"):
             vgroups_info[name]["priority_adjustment"] = (
                 vgroup.priority_adjustment.priority_adjustment_operator
-                + str(vgroup.priority_adjustment.priority_adjustment_value)
+                + str(
+                    getattr(vgroup.priority_adjustment, "priority_adjustment_value", 0)
+                )
             )
     if LooseVersion(TAGS_API_VERSION) <= LooseVersion(array.get_rest_version()):
         vgroup_tags = list(array.get_volume_groups_tags(resource_destroyed=False).items)
@@ -2949,7 +2951,9 @@ def generate_del_vgroups_dict(array):
         if hasattr(vgroup, "priority_adjustment"):
             vgroups_info[name]["priority_adjustment"] = (
                 vgroup.priority_adjustment.priority_adjustment_operator
-                + str(vgroup.priority_adjustment.priority_adjustment_value)
+                + str(
+                    getattr(vgroup.priority_adjustment, "priority_adjustment_value", 0)
+                )
             )
     vg_volumes = list(array.get_volume_groups_volumes().items)
     for vg_vol in vg_volumes:

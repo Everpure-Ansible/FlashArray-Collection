@@ -1,0 +1,4 @@
+bugfixes:
+  - "purefa_info - the ``volumes`` and ``vgroups`` subsets failed with ``AttributeError`` when the array returns a priority adjustment without ``priority_adjustment_value`` (no adjustment set); the value now reads as ``0``."
+  - "purefa_volume - reading or updating an existing volume failed with ``AttributeError`` when its priority adjustment carries no ``priority_adjustment_value``."
+  - "purefa_vg - updating a volume group failed with ``AttributeError`` when its priority adjustment carries no ``priority_adjustment_value``."

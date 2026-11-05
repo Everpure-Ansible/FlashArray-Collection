@@ -519,7 +519,7 @@ def update_vgroup(module, array):
     if LooseVersion(PRIORITY_API_VERSION) <= LooseVersion(api_version):
         vg_prio = vg_all.priority_adjustment
         new_operator = vg_prio.priority_adjustment_operator
-        new_value = vg_prio.priority_adjustment_value
+        new_value = getattr(vg_prio, "priority_adjustment_value", 0)
 
         if (
             module.params.get("priority_operator") is not None
@@ -531,7 +531,8 @@ def update_vgroup(module, array):
 
         if (
             module.params.get("priority_value") is not None
-            and vg_prio.priority_adjustment_value != module.params["priority_value"]
+            and getattr(vg_prio, "priority_adjustment_value", 0)
+            != module.params["priority_value"]
         ):
             new_value = module.params["priority_value"]
             changed = True

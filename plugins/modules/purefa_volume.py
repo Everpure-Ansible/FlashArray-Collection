@@ -407,9 +407,9 @@ def _volfact(module, array, volume_name):
             volfact[volume_name][
                 "priority_operator"
             ] = volume_data.priority_adjustment.priority_adjustment_operator
-            volfact[volume_name][
-                "priority_value"
-            ] = volume_data.priority_adjustment.priority_adjustment_value
+            volfact[volume_name]["priority_value"] = getattr(
+                volume_data.priority_adjustment, "priority_adjustment_value", 0
+            )
         if LooseVersion(CONTEXT_API_VERSION) <= LooseVersion(api_version):
             volfact[volume_name]["context"] = volume_data.context.name
     else:
@@ -1005,7 +1005,9 @@ def create_multi_volume(module, array, single=False):
                 volfact[vol_name][
                     "priority_operator"
                 ] = adj.priority_adjustment_operator
-                volfact[vol_name]["priority_value"] = adj.priority_adjustment_value
+                volfact[vol_name]["priority_value"] = getattr(
+                    adj, "priority_adjustment_value", 0
+                )
 
     module.exit_json(changed=changed, volume=volfact)
 
@@ -1205,21 +1207,19 @@ def update_volume(module, array):
             newop = module.params["priority_operator"]
         else:
             newop = vol.priority_adjustment.priority_adjustment_operator
-        if (
-            module.params["priority_value"]
-            and module.params["priority_value"]
-            != vol.priority_adjustment.priority_adjustment_value
-        ):
+        if module.params["priority_value"] and module.params[
+            "priority_value"
+        ] != getattr(vol.priority_adjustment, "priority_adjustment_value", 0):
             change_prio = True
             newval = module.params["priority_value"]
         elif (
             not module.params["priority_value"]
-            and vol.priority_adjustment.priority_adjustment_value != 0
+            and getattr(vol.priority_adjustment, "priority_adjustment_value", 0) != 0
         ):
             change_prio = True
             newval = 0
         else:
-            newval = vol.priority_adjustment.priority_adjustment_value
+            newval = getattr(vol.priority_adjustment, "priority_adjustment_value", 0)
         volumepatch = VolumePatch(
             priority_adjustment=PriorityAdjustment(
                 priority_adjustment_operator=newop,
