@@ -1,0 +1,2 @@
+bugfixes:
+  - "purefa_info - a gather no longer dies with ``'ErrorResponse' object has no attribute 'items'`` when an object it has just listed (a volume, host, protection group, file system or policy) is deleted by another client before its details are read, as happens on busy arrays; the object is reported as listed, with empty details."

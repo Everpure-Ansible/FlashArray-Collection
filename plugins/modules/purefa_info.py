@@ -154,6 +154,22 @@ def _is_cbs(array):
     return is_cbs
 
 
+def _items(res):
+    """Return the items of an SDK response, or [] when the array refused it.
+
+    Per-object lookups (the connections of a volume, the directories of a
+    file system, the rules of a policy, ...) run after the listing that named
+    the object.  On a busy array the object can be gone by then and the array
+    answers 400, which the SDK returns as an ErrorResponse that has no
+    ``items``; the gather then reports the object as it was listed instead
+    of crashing.
+    """
+    status = getattr(res, "status_code", None)
+    if isinstance(status, int) and status != 200:
+        return []
+    return list(getattr(res, "items", None) or [])
+
+
 def _priority_adjustment(obj):
     """Return (operator, value) of an object's priority adjustment.
 
@@ -678,7 +694,7 @@ def generate_filesystems_dict(array, performance):
             "destroyed": filesystem.destroyed,
             "directories": {},
         }
-        directories = list(array.get_directories(file_system_names=[fs_name]).items)
+        directories = _items(array.get_directories(file_system_names=[fs_name]))
         for directory in directories:
             d_name = directory.directory_name
             files_info[fs_name]["directories"][d_name] = {
@@ -826,7 +842,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
             "members": [],
             "rules": [],
         }
-        members = list(array.get_directories_policies(policy_names=[p_name]).items)
+        members = _items(array.get_directories_policies(policy_names=[p_name]))
         for member in members:
             m_name = member.member.name
             policy_info[p_name]["members"].append(m_name)
@@ -844,9 +860,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 policy_info[p_name]["continuous_availability_enabled"] = getattr(
                     smb_policies[0], "continuous_availability_enabled", None
                 )
-            rules = list(
-                array.get_policies_smb_client_rules(policy_names=[p_name]).items
-            )
+            rules = _items(array.get_policies_smb_client_rules(policy_names=[p_name]))
             for rule in rules:
                 smb_rules_dict = {
                     "client": rule.client,
@@ -855,8 +869,13 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 }
                 policy_info[p_name]["rules"].append(smb_rules_dict)
         if policy.policy_type == "nfs":
-            if nfs_user_mapping:
-                nfs_policy = list(array.get_policies_nfs(names=[p_name]).items)[0]
+            nfs_policies = (
+                _items(array.get_policies_nfs(names=[p_name]))
+                if nfs_user_mapping
+                else []
+            )
+            if nfs_policies:
+                nfs_policy = nfs_policies[0]
                 policy_info[p_name][
                     "user_mapping_enabled"
                 ] = nfs_policy.user_mapping_enabled
@@ -872,9 +891,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                     policy_info[p_name]["security"] = getattr(
                         nfs_policy, "security", None
                     )
-            rules = list(
-                array.get_policies_nfs_client_rules(policy_names=[p_name]).items
-            )
+            rules = _items(array.get_policies_nfs_client_rules(policy_names=[p_name]))
             for rule in rules:
                 nfs_rules_dict = {
                     "access": rule.access,
@@ -891,7 +908,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 LooseVersion(array.get_rest_version())
                 >= LooseVersion(SHARED_CAP_API_VERSION)
             )
-            rules = list(array.get_policies_snapshot_rules(policy_names=[p_name]).items)
+            rules = _items(array.get_policies_snapshot_rules(policy_names=[p_name]))
             for rule in rules:
                 try:
                     snap_rules_dict = {
@@ -914,7 +931,7 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                         snap_rules_dict["suffix"] = ""
                 policy_info[p_name]["rules"].append(snap_rules_dict)
         if policy.policy_type == "quota" and quota_available:
-            rules = list(array.get_policies_quota_rules(policy_names=[p_name]).items)
+            rules = _items(array.get_policies_quota_rules(policy_names=[p_name]))
             for rule in rules:
                 quota_rules_dict = {
                     "enforced": rule.enforced,
@@ -924,8 +941,13 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 policy_info[p_name]["rules"].append(quota_rules_dict)
         if policy.policy_type == "autodir" and autodir_available:
             pass  # there are currently no rules for autodir policies
-        if policy.policy_type == "password":
-            pwd_policy = list(array.get_policies_password(names=[p_name]).items)[0]
+        pwd_policies = (
+            _items(array.get_policies_password(names=[p_name]))
+            if policy.policy_type == "password"
+            else []
+        )
+        if pwd_policies:
+            pwd_policy = pwd_policies[0]
             policy_info[p_name] |= {
                 "enabled": pwd_policy.enabled,
                 "enforce_dictionary_check": pwd_policy.enforce_dictionary_check,
@@ -939,8 +961,13 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 "min_password_age": getattr(pwd_policy, "min_password_age", None),
                 "max_password_age": getattr(pwd_policy, "max_password_age", None),
             }
-        if policy.policy_type == "qos":
-            qos_policy = list(array.get_policies_qos(names=[p_name]).items)[0]
+        qos_policies = (
+            _items(array.get_policies_qos(names=[p_name]))
+            if policy.policy_type == "qos"
+            else []
+        )
+        if qos_policies:
+            qos_policy = qos_policies[0]
             policy_info[p_name] |= {
                 "max_total_bytes_per_sec": getattr(
                     qos_policy, "max_total_bytes_per_sec", None
@@ -957,8 +984,13 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                     getattr(realm, "name", None)
                     for realm in getattr(qos_policy, "realms", None) or []
                 ]
-        if policy.policy_type == "tls":
-            tls_policy = list(array.get_policies_tls(names=[p_name]).items)[0]
+        tls_policies = (
+            _items(array.get_policies_tls(names=[p_name]))
+            if policy.policy_type == "tls"
+            else []
+        )
+        if tls_policies:
+            tls_policy = tls_policies[0]
             policy_info[p_name] |= {
                 "appliance_certificate": getattr(
                     getattr(tls_policy, "appliance_certificate", None), "name", None
@@ -982,8 +1014,8 @@ def generate_policies_dict(array, quota_available, autodir_available, nfs_user_m
                 ),
             }
         if policy.policy_type == "network-access":
-            rules = list(
-                array.get_policies_network_access_rules(policy_names=[p_name]).items
+            rules = _items(
+                array.get_policies_network_access_rules(policy_names=[p_name])
             )
             for rule in rules:
                 na_rules_dict = {
@@ -2021,7 +2053,7 @@ def generate_vol_dict(array, performance):
             volume_info[volume]["priority"] = getattr(vol, "priority", None)
             operator, value = _priority_adjustment(vol)
             volume_info[volume]["priority_adjustment"] = operator + str(value)
-        connections = list(array.get_connections(volume_names=[vol.name]).items)
+        connections = _items(array.get_connections(volume_names=[vol.name]))
         voldict = {}
         for connection in connections:
             voldict = {
@@ -2172,7 +2204,7 @@ def generate_host_dict(array, performance):
         for nqn in getattr(host, "nqns", None) or []:
             logged_in[nqn] = sorted(login_map.get(nqn, []))
         host_info[hostname]["logged_in_ports"] = logged_in
-        host_connections = list(array.get_connections(host_names=[hostname]).items)
+        host_connections = _items(array.get_connections(host_names=[hostname]))
         for connection in host_connections:
             # connection.host_group and connection.volume are both optional, so
             # reading through them unguarded raises rather than returning None.
@@ -2386,30 +2418,30 @@ def generate_del_pgroups_dict(array):
         pgroups_info[protgroup]["snaps"] = _pgroup_snaps_dict(
             array, protgroup, pgroup_snapshots
         )
-        pgroup_volumes = list(
-            array.get_protection_groups_volumes(group_names=[protgroup]).items
+        pgroup_volumes = _items(
+            array.get_protection_groups_volumes(group_names=[protgroup])
         )
         for pg_vol in pgroup_volumes:
             pgroups_info[protgroup]["volumes"].append(pg_vol.member.name)
-        pgroup_hosts = list(
-            array.get_protection_groups_hosts(group_names=[protgroup]).items
+        pgroup_hosts = _items(
+            array.get_protection_groups_hosts(group_names=[protgroup])
         )
         for pg_host in pgroup_hosts:
             pgroups_info[protgroup]["hosts"].append(pg_host.member.name)
-        pgroup_hgs = list(
-            array.get_protection_groups_host_groups(group_names=[protgroup]).items
+        pgroup_hgs = _items(
+            array.get_protection_groups_host_groups(group_names=[protgroup])
         )
         for pg_hg in pgroup_hgs:
             pgroups_info[protgroup]["hgroups"].append(pg_hg.member.name)
-        pgroup_targets = list(
-            array.get_protection_groups_targets(group_names=[protgroup]).items
+        pgroup_targets = _items(
+            array.get_protection_groups_targets(group_names=[protgroup])
         )
         for pg_target in pgroup_targets:
             pgroups_info[protgroup]["targets"].append(pg_target.member.name)
         if LooseVersion(SHARED_CAP_API_VERSION) <= LooseVersion(api_version):
             pgroups_info[protgroup]["deleted_volumes"] = []
-            volumes = list(
-                array.get_protection_groups_volumes(group_names=[protgroup]).items
+            volumes = _items(
+                array.get_protection_groups_volumes(group_names=[protgroup])
             )
             if volumes:
                 for volume in volumes:
@@ -2492,30 +2524,30 @@ def generate_pgroups_dict(array):
         pgroups_info[protgroup]["snaps"] = _pgroup_snaps_dict(
             array, protgroup, pgroup_snapshots
         )
-        pgroup_volumes = list(
-            array.get_protection_groups_volumes(group_names=[protgroup]).items
+        pgroup_volumes = _items(
+            array.get_protection_groups_volumes(group_names=[protgroup])
         )
         for pg_vol in pgroup_volumes:
             pgroups_info[protgroup]["volumes"].append(pg_vol.member.name)
-        pgroup_hosts = list(
-            array.get_protection_groups_hosts(group_names=[protgroup]).items
+        pgroup_hosts = _items(
+            array.get_protection_groups_hosts(group_names=[protgroup])
         )
         for pg_host in pgroup_hosts:
             pgroups_info[protgroup]["hosts"].append(pg_host.member.name)
-        pgroup_hgs = list(
-            array.get_protection_groups_host_groups(group_names=[protgroup]).items
+        pgroup_hgs = _items(
+            array.get_protection_groups_host_groups(group_names=[protgroup])
         )
         for pg_hg in pgroup_hgs:
             pgroups_info[protgroup]["hgroups"].append(pg_hg.member.name)
-        pgroup_targets = list(
-            array.get_protection_groups_targets(group_names=[protgroup]).items
+        pgroup_targets = _items(
+            array.get_protection_groups_targets(group_names=[protgroup])
         )
         for pg_target in pgroup_targets:
             pgroups_info[protgroup]["targets"].append(pg_target.member.name)
         if LooseVersion(SHARED_CAP_API_VERSION) <= LooseVersion(api_version):
             pgroups_info[protgroup]["deleted_volumes"] = []
-            volumes = list(
-                array.get_protection_groups_volumes(group_names=[protgroup]).items
+            volumes = _items(
+                array.get_protection_groups_volumes(group_names=[protgroup])
             )
             if volumes:
                 for volume in volumes:

@@ -45,6 +45,7 @@ from plugins.modules.purefa_info import (
     _directory_exports_by_name,
     _saml2sso_dict,
     _priority_adjustment,
+    _items,
     generate_default_dict,
     generate_perf_dict,
     generate_admin_dict,
@@ -1083,6 +1084,73 @@ class TestGenerateVolDict:
         assert result["test_vol"]["size"] == 10737418240
         assert result["test_vol"]["priority_adjustment"] == "+10"
 
+    def test_generate_vol_dict_volume_vanished_before_connections(self):
+        """A volume deleted between the listing and its connections lookup is
+        still reported (with no hosts) instead of crashing on the ErrorResponse"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+
+        mock_vol = Mock()
+        mock_vol.name = "gone_vol"
+        mock_vol.subtype = "regular"
+        mock_vol.provisioned = 1073741824
+        mock_vol.source = None
+        mock_vol.created = 1609459200000
+        mock_vol.serial = "ABCD1234567890EF"
+        mock_vol.promotion_status = "promoted"
+        mock_vol.requested_promotion_state = "promoted"
+        mock_vol.qos = Mock(bandwidth_limit=None, iops_limit=None)
+        mock_vol.space = Mock()
+        mock_vol.host_encryption_key_status = None
+        mock_vol.priority = 0
+        mock_vol.priority_adjustment = Mock(
+            priority_adjustment_operator="+", priority_adjustment_value=0
+        )
+        mock_vol.protocol_endpoint = None
+
+        mock_array.get_volumes.return_value = Mock(items=[mock_vol])
+        # The real ErrorResponse has status_code and errors but no items
+        mock_array.get_connections.return_value = Mock(
+            spec=["status_code", "errors"],
+            status_code=400,
+            errors=[Mock(message="Volume does not exist.")],
+        )
+        mock_array.get_volumes_tags.return_value = Mock(items=[])
+
+        result = generate_vol_dict(mock_array, performance=False)
+
+        assert "gone_vol" in result
+        assert result["gone_vol"]["hosts"] == []
+
+
+class TestItems:
+    """_items turns an SDK response into a list and swallows array refusals"""
+
+    def test_items_returns_list_on_success(self):
+        res = Mock(status_code=200, items=iter(["a", "b"]))
+
+        assert _items(res) == ["a", "b"]
+
+    def test_items_empty_for_error_response(self):
+        res = Mock(
+            spec=["status_code", "errors"],
+            status_code=400,
+            errors=[Mock(message="Volume does not exist.")],
+        )
+
+        assert _items(res) == []
+
+    def test_items_tolerates_mocked_status(self):
+        """A response without an integer status is read like a success"""
+        res = Mock(items=["x"])
+
+        assert _items(res) == ["x"]
+
+    def test_items_empty_when_items_is_none(self):
+        res = Mock(status_code=200, items=None)
+
+        assert _items(res) == []
+
 
 class TestGenerateHostDict:
     """Test cases for generate_host_dict function"""
@@ -1121,6 +1189,42 @@ class TestGenerateHostDict:
         assert result["test_host"]["logged_in_ports"] == {
             "iqn.2021-01.com.example:host1": []
         }
+
+    def test_generate_host_dict_host_vanished_before_connections(self):
+        """A host deleted between the listing and its connections lookup is
+        still reported (with no volumes) instead of crashing on the ErrorResponse"""
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+
+        mock_host = Mock()
+        mock_host.name = "gone_host"
+        mock_host.host_group = None
+        mock_host.nqns = None
+        mock_host.iqns = ["iqn.2021-01.com.example:host1"]
+        mock_host.wwns = None
+        mock_host.personality = "linux"
+        mock_host.chap = Mock(host_user=None, target_user=None)
+        mock_host.preferred_arrays = {}
+        mock_host.is_local = True
+        mock_host.port_connectivity = Mock(details={})
+        mock_host.destroyed = False
+        mock_host.time_remaining = None
+        mock_host.vlan = None
+
+        mock_array.get_hosts.return_value = Mock(items=[mock_host])
+        mock_array.get_hosts_performance_balance.return_value = Mock(items=[])
+        mock_array.get_connections.return_value = Mock(
+            spec=["status_code", "errors"],
+            status_code=400,
+            errors=[Mock(message="Host does not exist.")],
+        )
+        mock_array.get_hosts_tags.return_value = Mock(items=[])
+        mock_array.get_ports_initiators.return_value = Mock(items=[])
+
+        result = generate_host_dict(mock_array, performance=False)
+
+        assert "gone_host" in result
+        assert result["gone_host"]["volumes"] == []
 
     def test_generate_host_dict_preferred_arrays(self):
         """preferred_arrays is a list of Reference objects, not a dict"""
