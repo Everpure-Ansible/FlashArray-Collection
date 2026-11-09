@@ -97,7 +97,8 @@ options:
     - Bandwidth limit for volume in M or G units.
       M will set MB/s
       G will set GB/s
-      To clear an existing QoS setting use 0 (zero)
+      To clear an existing QoS setting use 0 (zero). This removes the limit
+      entirely; the array then reports no limit and the returned facts show 0.
     type: str
     aliases: [ qos ]
   iops_qos:
@@ -105,7 +106,8 @@ options:
     - IOPs limit for volume - use value or K or M
       K will mean 1000
       M will mean 1000000
-      To clear an existing IOPs setting use 0 (zero)
+      To clear an existing IOPs setting use 0 (zero). This removes the limit
+      entirely; the array then reports no limit and the returned facts show 0.
     type: str
   move:
     description:
@@ -348,6 +350,12 @@ try:
 except ImportError:
     HAS_PURESTORAGE = False
 
+try:
+    # Only this model accepts the empty string that clears a QoS limit
+    from pypureclient.flasharray import QosPatch
+except ImportError:
+    QosPatch = None
+
 import re
 import time
 from ansible.module_utils.basic import AnsibleModule
@@ -427,6 +435,58 @@ def _stored_priority(operator, value, bands):
     if operator in ("+", "-") and bands:
         return "=", -value if operator == "-" else value
     return operator, value
+
+
+def _qos_clear_requested(value):
+    """True when a QoS option asks for the limit to be removed.
+
+    The documented token is 0, with or without a unit (``0``, ``0M``,
+    ``0K``); an empty string clears as well, as in purefa_realm. Anything
+    else that merely parses to 0, such as the typo ``10X``, is not a clear:
+    human_to_bytes and human_to_real return 0 for a malformed value, so the
+    callers report those as out of range instead of silently removing a
+    limit.
+    """
+    text = str(value).strip().upper()
+    return text == "" or re.fullmatch(r"0+[KMGTP]?B?", text) is not None
+
+
+def _qos_fields(module):
+    """The non-zero QoS limits requested for a new volume.
+
+    A requested 0 means "no limit", which a new volume has by default, so
+    it is left out rather than sent (the array rejects 0 as out of range).
+    """
+    fields = {}
+    bw_limit = (
+        int(human_to_bytes(module.params["bw_qos"])) if module.params["bw_qos"] else 0
+    )
+    iops_limit = (
+        int(human_to_real(module.params["iops_qos"]))
+        if module.params["iops_qos"]
+        else 0
+    )
+    if bw_limit:
+        fields["bandwidth_limit"] = bw_limit
+    if iops_limit:
+        fields["iops_limit"] = iops_limit
+    return fields
+
+
+def _qos_patch(module, **limits):
+    """The SDK object that carries the given QoS limits for a PATCH.
+
+    The REST API clears a limit with an empty string, which only the
+    QosPatch model (py-pure-client 1.86.0 and later) accepts. A numeric
+    limit goes through the plain Qos model, as before.
+    """
+    if "" in limits.values():
+        if QosPatch is None:
+            module.fail_json(
+                msg="Clearing a QoS limit requires py-pure-client 1.86.0 or later"
+            )
+        return QosPatch(**limits)
+    return Qos(**limits)
 
 
 def _volfact(module, array, volume_name):
@@ -673,73 +733,25 @@ def create_volume(module, array):
             module.fail_json(msg="Volume cannot be created in a demoted pod")
     if not module.params["size"]:
         module.fail_json(msg="Size for a new volume must be specified")
-    if module.params["bw_qos"] or module.params["iops_qos"]:
-        if module.params["bw_qos"] and not module.params["iops_qos"]:
-            changed = True
-            if not module.check_mode:
-                res = post_with_context(
-                    array,
-                    "post_volumes",
-                    CONTEXT_API_VERSION,
-                    module,
-                    names=[module.params["name"]],
-                    volume=VolumePost(
-                        provisioned=int(human_to_bytes(module.params["size"])),
-                        qos=Qos(
-                            bandwidth_limit=int(human_to_bytes(module.params["bw_qos"]))
-                        ),
-                    ),
-                )
-                check_response(res, module, f"Volume {module.params['name']} creation")
-        elif module.params["iops_qos"] and not module.params["bw_qos"]:
-            changed = True
-            if not module.check_mode:
-                res = post_with_context(
-                    array,
-                    "post_volumes",
-                    CONTEXT_API_VERSION,
-                    module,
-                    names=[module.params["name"]],
-                    volume=VolumePost(
-                        provisioned=int(human_to_bytes(module.params["size"])),
-                        qos=Qos(iops_limit=int(module.params["iops_qos"])),
-                    ),
-                )
-                check_response(res, module, f"Volume {module.params['name']} creation")
-        else:
-            changed = True
-            if not module.check_mode:
-                res = post_with_context(
-                    array,
-                    "post_volumes",
-                    CONTEXT_API_VERSION,
-                    module,
-                    names=[module.params["name"]],
-                    volume=VolumePost(
-                        provisioned=int(human_to_bytes(module.params["size"])),
-                        qos=Qos(
-                            iops_limit=int(human_to_real(module.params["iops_qos"])),
-                            bandwidth_limit=int(
-                                human_to_bytes(module.params["bw_qos"])
-                            ),
-                        ),
-                    ),
-                )
-                check_response(res, module, f"Volume {module.params['name']} creation")
-    else:
-        changed = True
-        if not module.check_mode:
-            res = post_with_context(
-                array,
-                "post_volumes",
-                CONTEXT_API_VERSION,
-                module,
-                names=[module.params["name"]],
-                volume=VolumePost(
-                    provisioned=int(human_to_bytes(module.params["size"]))
-                ),
+    qos_fields = _qos_fields(module)
+    changed = True
+    if not module.check_mode:
+        if qos_fields:
+            volume = VolumePost(
+                provisioned=int(human_to_bytes(module.params["size"])),
+                qos=Qos(**qos_fields),
             )
-            check_response(res, module, f"Volume {module.params['name']} creation")
+        else:
+            volume = VolumePost(provisioned=int(human_to_bytes(module.params["size"])))
+        res = post_with_context(
+            array,
+            "post_volumes",
+            CONTEXT_API_VERSION,
+            module,
+            names=[module.params["name"]],
+            volume=volume,
+        )
+        check_response(res, module, f"Volume {module.params['name']} creation")
     if module.params["promotion_state"]:
         volume = VolumePatch(requested_promotion_state=module.params["promotion_state"])
         changed = True
@@ -868,30 +880,16 @@ def create_multi_volume(module, array, single=False):
             )
     else:
         names.append(module.params["name"])
-    if module.params["bw_qos"] and module.params["iops_qos"]:
+    qos_fields = _qos_fields(module)
+    if qos_fields:
         vols = VolumePost(
             provisioned=int(human_to_bytes(module.params["size"])),
-            qos=Qos(
-                bandwidth_limit=int(human_to_bytes(module.params["bw_qos"])),
-                iops_limit=int(human_to_real(module.params["iops_qos"])),
-            ),
+            qos=Qos(**qos_fields),
             subtype="regular",
         )
-    elif not module.params["bw_qos"] and not module.params["iops_qos"]:
+    else:
         vols = VolumePost(
             provisioned=int(human_to_bytes(module.params["size"])), subtype="regular"
-        )
-    elif not module.params["bw_qos"] and module.params["iops_qos"]:
-        vols = VolumePost(
-            provisioned=int(human_to_bytes(module.params["size"])),
-            qos=Qos(iops_limit=int(human_to_real(module.params["iops_qos"]))),
-            subtype="regular",
-        )
-    elif module.params["bw_qos"] and not module.params["iops_qos"]:
-        vols = VolumePost(
-            provisioned=int(human_to_bytes(module.params["size"])),
-            qos=Qos(bandwidth_limit=int(human_to_bytes(module.params["bw_qos"]))),
-            subtype="regular",
         )
     if not module.check_mode:
         if module.params["add_to_pgs"]:
@@ -1046,10 +1044,15 @@ def create_multi_volume(module, array, single=False):
             }
 
             # Optional fields
-            if module.params["bw_qos"]:
-                volfact[vol_name]["bandwidth_limit"] = item.qos.bandwidth_limit
-            if module.params["iops_qos"]:
-                volfact[vol_name]["iops_limit"] = item.qos.iops_limit
+            # A limit left unset (requested as 0) is absent from the response
+            # and the SDK raises on reading it, so read with a default
+            item_qos = getattr(item, "qos", None)
+            if module.params["bw_qos"] is not None:
+                volfact[vol_name]["bandwidth_limit"] = getattr(
+                    item_qos, "bandwidth_limit", 0
+                )
+            if module.params["iops_qos"] is not None:
+                volfact[vol_name]["iops_limit"] = getattr(item_qos, "iops_limit", 0)
             if module.params["promotion_state"]:
                 # From the promotion PATCH response, not the priority one:
                 # a task may set promotion_state without priority_operator
@@ -1163,11 +1166,11 @@ def update_volume(module, array):
             names=[module.params["name"]],
         ).items
     )[0]
-    vol_qos = vol.qos
-    if not hasattr(vol_qos, "bandwidth_limit"):
-        vol.qos.bandwidth_limit = 549755813888
-    if not hasattr(vol_qos, "iops_limit"):
-        vol.qos.iops_limit = 100000000
+    # An unlimited volume reads back with no bandwidth_limit / iops_limit
+    # attribute, so None means "no limit" here.
+    vol_qos = getattr(vol, "qos", None)
+    current_bw = getattr(vol_qos, "bandwidth_limit", None)
+    current_iops = getattr(vol_qos, "iops_limit", None)
     if module.params["size"]:
         if human_to_bytes(module.params["size"]) != vol.provisioned:
             if human_to_bytes(module.params["size"]) > vol.provisioned:
@@ -1186,13 +1189,20 @@ def update_volume(module, array):
                     check_response(
                         res, module, f"Volume {module.params['name']} resize"
                     )
-    if module.params["bw_qos"]:
-        # "0" (or an empty string) means "no limit", which the array
-        # represents as the maximum bandwidth value.
-        new_bw_limit = int(human_to_bytes(module.params["bw_qos"]))
+    if module.params["bw_qos"] is not None:
+        # "0" means "no limit": clear any existing limit (the maximum
+        # value is still an explicit limit and is cleared too).
+        if _qos_clear_requested(module.params["bw_qos"]):
+            new_bw_limit = 0
+        else:
+            new_bw_limit = int(human_to_bytes(module.params["bw_qos"]))
         if new_bw_limit == 0:
-            new_bw_limit = 549755813888
-        if new_bw_limit != int(vol_qos.bandwidth_limit):
+            bw_changed = current_bw is not None
+            bw_patch_value = ""
+        else:
+            bw_changed = current_bw is None or new_bw_limit != int(current_bw)
+            bw_patch_value = new_bw_limit
+        if bw_changed:
             changed = True
             if not module.check_mode:
                 res = patch_with_context(
@@ -1201,20 +1211,29 @@ def update_volume(module, array):
                     CONTEXT_API_VERSION,
                     module,
                     names=[module.params["name"]],
-                    volume=VolumePatch(qos=Qos(bandwidth_limit=new_bw_limit)),
+                    volume=VolumePatch(
+                        qos=_qos_patch(module, bandwidth_limit=bw_patch_value)
+                    ),
                 )
-                if new_bw_limit == 549755813888:
+                if new_bw_limit == 0:
                     msg = f"Volume {module.params['name']} Bandwidth QoS removal"
                 else:
                     msg = f"Volume {module.params['name']} Bandwidth QoS change"
                 check_response(res, module, msg)
-    if module.params["iops_qos"]:
-        # "0" (or an empty string) means "no limit", which the array
-        # represents as the maximum IOPs value.
-        new_iops_limit = int(human_to_real(module.params["iops_qos"]))
+    if module.params["iops_qos"] is not None:
+        # "0" means "no limit": clear any existing limit (the maximum
+        # value is still an explicit limit and is cleared too).
+        if _qos_clear_requested(module.params["iops_qos"]):
+            new_iops_limit = 0
+        else:
+            new_iops_limit = int(human_to_real(module.params["iops_qos"]))
         if new_iops_limit == 0:
-            new_iops_limit = 100000000
-        if new_iops_limit != int(vol_qos.iops_limit):
+            iops_changed = current_iops is not None
+            iops_patch_value = ""
+        else:
+            iops_changed = current_iops is None or new_iops_limit != int(current_iops)
+            iops_patch_value = new_iops_limit
+        if iops_changed:
             changed = True
             if not module.check_mode:
                 res = patch_with_context(
@@ -1223,9 +1242,11 @@ def update_volume(module, array):
                     CONTEXT_API_VERSION,
                     module,
                     names=[module.params["name"]],
-                    volume=VolumePatch(qos=Qos(iops_limit=new_iops_limit)),
+                    volume=VolumePatch(
+                        qos=_qos_patch(module, iops_limit=iops_patch_value)
+                    ),
                 )
-                if new_iops_limit == 100000000:
+                if new_iops_limit == 0:
                     msg = f"Volume {module.params['name']} IOPs QoS removal"
                 else:
                     msg = f"Volume {module.params['name']} IOPs QoS change"
@@ -1714,15 +1735,19 @@ def main():
         if fleet_res.status_code == 200 and list(fleet_res.items):
             module.params["context"] = list(array.get_arrays().items)[0].name
 
-    if module.params["bw_qos"]:
+    if module.params["bw_qos"] is not None:
         bw_qos = int(human_to_bytes(module.params["bw_qos"]))
-        if bw_qos in range(1048576, 549755813888) or bw_qos == 0:
+        if _qos_clear_requested(module.params["bw_qos"]) or bw_qos in range(
+            1048576, 549755813889
+        ):
             bw_qos_size = True
         else:
             module.fail_json(msg="Bandwidth QoS value out of range.")
-    if module.params["iops_qos"]:
+    if module.params["iops_qos"] is not None:
         iops_qos = int(human_to_real(module.params["iops_qos"]))
-        if iops_qos in range(100, 100000000) or iops_qos == 0:
+        if _qos_clear_requested(module.params["iops_qos"]) or iops_qos in range(
+            100, 100000001
+        ):
             iops_qos_size = True
         else:
             module.fail_json(msg="IOPs QoS value out of range.")

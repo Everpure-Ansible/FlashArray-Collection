@@ -68,6 +68,7 @@ for _helper_name in (
     getattr(_api_helpers_mock, _helper_name).side_effect = _ctx_delegate
 
 from plugins.modules.purefa_volume import (
+    _qos_clear_requested,
     main,
     get_volume,
     get_destroyed_volume,
@@ -2101,7 +2102,7 @@ class TestUpdateVolumeSuccess:
         mock_vol = Mock()
         mock_vol.provisioned = 10737418240
         mock_vol.qos = Mock()
-        mock_vol.qos.bandwidth_limit = 549755813888  # Default unlimited
+        mock_vol.qos.bandwidth_limit = 549755813888  # Explicit limit at the maximum
         mock_vol.qos.iops_limit = 100000000
         mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
         mock_array.patch_volumes.return_value = Mock(status_code=200)
@@ -2379,7 +2380,7 @@ class TestUpdateVolumeQos:
         mock_vol = Mock()
         mock_vol.provisioned = 10737418240
         mock_vol.qos = Mock()
-        mock_vol.qos.bandwidth_limit = 549755813888  # Current is max
+        mock_vol.qos.bandwidth_limit = 549755813888  # Explicit limit at the maximum
         mock_vol.qos.iops_limit = 100000000
         mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
         mock_h2b.return_value = 10737418240  # 10G
@@ -2586,7 +2587,7 @@ class TestUpdateVolumeQos:
         mock_vol.provisioned = 10737418240
         mock_vol.qos = Mock()
         mock_vol.qos.bandwidth_limit = 549755813888
-        mock_vol.qos.iops_limit = 100000000  # Current is max
+        mock_vol.qos.iops_limit = 100000000  # Explicit limit at the maximum
         mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
         mock_h2b.return_value = 549755813888
         mock_h2r.return_value = 50000  # 50K
@@ -6604,9 +6605,8 @@ class TestQaFixes:
         }
         mock_vol = Mock()
         mock_vol.provisioned = 10737418240
-        mock_vol.qos = Mock()
-        mock_vol.qos.bandwidth_limit = 549755813888
-        mock_vol.qos.iops_limit = 100000000
+        # An unlimited volume reads back with no limit attributes at all
+        mock_vol.qos = Mock(spec=[])
         mock_array = Mock()
         mock_array.get_rest_version.return_value = "2.38"
         mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
@@ -6625,7 +6625,7 @@ class TestQaFixes:
     def test_update_volume_clear_bw_qos_when_limited(
         self, mock_lv, mock_h2b, mock_check_response, mock_volfact
     ):
-        """bw_qos of 0 against a limited volume patches the no-limit value"""
+        """bw_qos of 0 against a limited volume PATCHes a clear of the limit"""
         mock_h2b.return_value = 0
         mock_volfact.return_value = {"test-vol": {}}
         mock_module = Mock()
@@ -7184,3 +7184,595 @@ class TestCreateMultiVolumePromotion:
         mock_module.fail_json.assert_called_once()
         assert "promotion refused" in mock_module.fail_json.call_args[1]["msg"]
         mock_module.exit_json.assert_not_called()
+
+
+class TestQosClear:
+    """A QoS limit is cleared with the QosPatch empty string, never the maximum
+
+    An unlimited volume reads back with no bandwidth_limit / iops_limit
+    attribute; the maximum value is an explicit limit like any other.
+    """
+
+    MAX_BW = 549755813888
+    MAX_IOPS = 100000000
+
+    @staticmethod
+    def _module(check_mode=False, **overrides):
+        mock_module = Mock()
+        mock_module.check_mode = check_mode
+        mock_module.params = {
+            "name": "test-vol",
+            "size": None,
+            "bw_qos": None,
+            "iops_qos": None,
+            "pgroup": None,
+            "add_to_pgs": None,
+            "context": "",
+            "with_default_protection": False,
+            "promotion_state": None,
+            "priority_operator": None,
+            "priority_value": None,
+        }
+        mock_module.params.update(overrides)
+        return mock_module
+
+    @staticmethod
+    def _array(qos):
+        mock_vol = Mock()
+        mock_vol.provisioned = 10737418240
+        mock_vol.qos = qos
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.get_volumes.return_value = Mock(status_code=200, items=[mock_vol])
+        mock_array.patch_volumes.return_value = Mock(status_code=200)
+        return mock_array
+
+    @staticmethod
+    def _limited(bandwidth_limit=None, iops_limit=None):
+        qos = Mock(spec=["bandwidth_limit", "iops_limit"])
+        qos.bandwidth_limit = bandwidth_limit
+        qos.iops_limit = iops_limit
+        return qos
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_clear_bw_against_explicit_limit(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2b, mock_check_response, _vf
+    ):
+        """bw_qos 0 against a 100M limit PATCHes QosPatch(bandwidth_limit="")"""
+        mock_module = self._module(bw_qos="0")
+        mock_array = self._array(self._limited(bandwidth_limit=104857600))
+
+        update_volume(mock_module, mock_array)
+
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
+        mock_qos.assert_not_called()
+        mock_array.patch_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_clear_bw_against_maximum_limit(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2b, mock_check_response, _vf
+    ):
+        """The maximum bandwidth value is an explicit limit and is cleared too"""
+        mock_module = self._module(bw_qos="0")
+        mock_array = self._array(self._limited(bandwidth_limit=self.MAX_BW))
+
+        update_volume(mock_module, mock_array)
+
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
+        mock_qos.assert_not_called()
+        mock_array.patch_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_clear_iops_against_maximum_limit(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2r, mock_check_response, _vf
+    ):
+        """iops_qos 0 against the maximum IOPs value PATCHes QosPatch(iops_limit="")"""
+        mock_module = self._module(iops_qos="0")
+        mock_array = self._array(self._limited(iops_limit=self.MAX_IOPS))
+
+        update_volume(mock_module, mock_array)
+
+        mock_qos_patch.assert_called_once_with(iops_limit="")
+        mock_qos.assert_not_called()
+        mock_array.patch_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_clear_against_absent_attributes_is_noop(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2b, mock_h2r, _vf
+    ):
+        """0 against a volume with no limit attributes makes no PATCH"""
+        mock_module = self._module(bw_qos="0", iops_qos="0")
+        mock_array = self._array(Mock(spec=[]))
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(
+            changed=False, volume={"test-vol": {}}
+        )
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    def test_clear_against_none_values_is_noop(
+        self, mock_qos_patch, mock_lv, mock_h2b, mock_h2r, _vf
+    ):
+        """0 against limits that read back as None makes no PATCH"""
+        mock_module = self._module(bw_qos="0", iops_qos="0")
+        mock_array = self._array(self._limited(bandwidth_limit=None, iops_limit=None))
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(
+            changed=False, volume={"test-vol": {}}
+        )
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=104857600)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_numeric_bw_change_uses_qos(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2b, mock_check_response, _vf
+    ):
+        """A numeric bandwidth change still goes through Qos with the number"""
+        mock_module = self._module(bw_qos="100M")
+        mock_array = self._array(self._limited(bandwidth_limit=52428800))
+
+        update_volume(mock_module, mock_array)
+
+        mock_qos.assert_called_once_with(bandwidth_limit=104857600)
+        mock_qos_patch.assert_not_called()
+        mock_array.patch_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=50000)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_numeric_iops_set_against_no_limit_uses_qos(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2r, mock_check_response, _vf
+    ):
+        """Setting IOPs on an unlimited volume is a change sent through Qos"""
+        mock_module = self._module(iops_qos="50K")
+        mock_array = self._array(Mock(spec=[]))
+
+        update_volume(mock_module, mock_array)
+
+        mock_qos.assert_called_once_with(iops_limit=50000)
+        mock_qos_patch.assert_not_called()
+        mock_array.patch_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=50000)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_numeric_iops_unchanged_is_noop(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2r, _vf
+    ):
+        """The same numeric IOPs limit makes no PATCH"""
+        mock_module = self._module(iops_qos="50K")
+        mock_array = self._array(self._limited(iops_limit=50000))
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_qos.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(
+            changed=False, volume={"test-vol": {}}
+        )
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_check_mode_pending_clear(
+        self, mock_qos, mock_qos_patch, mock_lv, mock_h2b, _vf
+    ):
+        """Check mode with a pending clear reports changed and PATCHes nothing"""
+        mock_module = self._module(check_mode=True, bw_qos="0")
+        mock_array = self._array(self._limited(bandwidth_limit=104857600))
+
+        update_volume(mock_module, mock_array)
+
+        mock_array.patch_volumes.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_qos.assert_not_called()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch", None)
+    def test_clear_without_qospatch_fails(self, mock_lv, mock_h2b, _vf):
+        """Without the QosPatch model a clear fails naming py-pure-client"""
+        import pytest
+
+        mock_module = self._module(bw_qos="0")
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        mock_array = self._array(self._limited(bandwidth_limit=104857600))
+
+        with pytest.raises(SystemExit):
+            update_volume(mock_module, mock_array)
+
+        mock_module.fail_json.assert_called_once()
+        assert "py-pure-client" in mock_module.fail_json.call_args[1]["msg"]
+        mock_array.patch_volumes.assert_not_called()
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test-vol": {}})
+    @patch("plugins.modules.purefa_volume.human_to_bytes", return_value=104857600)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.QosPatch", None)
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_numeric_change_without_qospatch_still_works(
+        self, mock_qos, mock_lv, mock_h2b, _vf
+    ):
+        """The QosPatch model is only needed for a clear"""
+        mock_module = self._module(bw_qos="100M")
+        mock_array = self._array(self._limited(bandwidth_limit=52428800))
+
+        with patch("plugins.modules.purefa_volume.check_response"):
+            update_volume(mock_module, mock_array)
+
+        mock_module.fail_json.assert_not_called()
+        mock_qos.assert_called_once_with(bandwidth_limit=104857600)
+        mock_array.patch_volumes.assert_called_once()
+
+
+class TestCreateVolumeQosZero:
+    """A requested 0 at create means no limit and is not sent to the array"""
+
+    @staticmethod
+    def _h2b(value):
+        return 0 if value == "0" else 1073741824
+
+    @staticmethod
+    def _h2r(value):
+        return 0 if value == "0" else 50000
+
+    @staticmethod
+    def _module(**overrides):
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "test_volume",
+            "size": "1G",
+            "bw_qos": None,
+            "iops_qos": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": None,
+            "pgroup": None,
+            "context": "array1",
+        }
+        mock_module.params.update(overrides)
+        return mock_module
+
+    @staticmethod
+    def _array():
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array.post_volumes.return_value = Mock(status_code=200)
+        return mock_array
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test_volume": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_create_volume_bw_zero_sends_no_qos(
+        self, mock_qos, mock_volume_post, mock_lv, mock_h2b, mock_h2r, mock_cr, _vf
+    ):
+        """bw_qos 0 and iops_qos 0 at create build a VolumePost without qos"""
+        mock_h2b.side_effect = self._h2b
+        mock_h2r.side_effect = self._h2r
+        mock_module = self._module(bw_qos="0", iops_qos="0")
+        mock_array = self._array()
+
+        create_volume(mock_module, mock_array)
+
+        mock_qos.assert_not_called()
+        mock_volume_post.assert_called_once_with(provisioned=1073741824)
+        mock_array.post_volumes.assert_called_once()
+        assert mock_module.exit_json.call_args[1]["changed"] is True
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test_volume": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_create_volume_bw_zero_iops_set_sends_iops_only(
+        self, mock_qos, mock_volume_post, mock_lv, mock_h2b, mock_h2r, mock_cr, _vf
+    ):
+        """bw_qos 0 with iops_qos 50K at create sends only the IOPs limit"""
+        mock_h2b.side_effect = self._h2b
+        mock_h2r.side_effect = self._h2r
+        mock_module = self._module(bw_qos="0", iops_qos="50K")
+        mock_array = self._array()
+
+        create_volume(mock_module, mock_array)
+
+        mock_qos.assert_called_once_with(iops_limit=50000)
+        mock_volume_post.assert_called_once_with(
+            provisioned=1073741824, qos=mock_qos.return_value
+        )
+        mock_array.post_volumes.assert_called_once()
+
+    @patch("plugins.modules.purefa_volume._volfact", return_value={"test_volume": {}})
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_create_volume_both_limits_sends_both(
+        self, mock_qos, mock_volume_post, mock_lv, mock_h2b, mock_h2r, mock_cr, _vf
+    ):
+        """Numeric bw_qos and iops_qos at create are both sent through Qos"""
+        mock_h2b.side_effect = lambda value: (
+            104857600 if value == "100M" else 1073741824
+        )
+        mock_h2r.side_effect = self._h2r
+        mock_module = self._module(bw_qos="100M", iops_qos="50K")
+        mock_array = self._array()
+
+        create_volume(mock_module, mock_array)
+
+        mock_qos.assert_called_once_with(bandwidth_limit=104857600, iops_limit=50000)
+        mock_volume_post.assert_called_once_with(
+            provisioned=1073741824, qos=mock_qos.return_value
+        )
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.check_vgroup", return_value=True)
+    @patch("plugins.modules.purefa_volume.check_pod", return_value=True)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_create_multi_volume_bw_zero_sends_no_qos(
+        self,
+        mock_qos,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_h2b,
+        mock_h2r,
+        mock_cr,
+    ):
+        """bw_qos 0 on a multi-volume create builds the VolumePost without qos"""
+        mock_h2b.side_effect = self._h2b
+        mock_h2r.side_effect = self._h2r
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "vol",
+            "size": "1G",
+            "count": 2,
+            "start": 0,
+            "digits": 2,
+            "suffix": "",
+            "bw_qos": "0",
+            "iops_qos": None,
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": None,
+            "priority_value": None,
+            "with_default_protection": True,
+            "context": "",
+        }
+        mock_items = []
+        for i in range(2):
+            mock_item = Mock()
+            mock_item.name = f"vol0{i}"
+            mock_item.provisioned = 1073741824
+            mock_item.serial = f"SERIAL000{i}"
+            mock_item.created = 1700000000000
+            mock_items.append(mock_item)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array_item = Mock()
+        mock_array_item.name = "array1"
+        mock_array.get_arrays.return_value = Mock(items=[mock_array_item])
+        mock_array.post_volumes.return_value = Mock(status_code=200, items=mock_items)
+
+        create_multi_volume(mock_module, mock_array)
+
+        mock_qos.assert_not_called()
+        # The last VolumePost built is the one sent (the first is the bare
+        # initialiser the function starts from)
+        assert mock_volume_post.call_args[1] == {
+            "provisioned": 1073741824,
+            "subtype": "regular",
+        }
+        mock_array.post_volumes.assert_called_once()
+        assert mock_array.post_volumes.call_args[1]["names"] == ["vol00", "vol01"]
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_real")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.check_vgroup", return_value=True)
+    @patch("plugins.modules.purefa_volume.check_pod", return_value=True)
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_create_multi_volume_iops_only_sends_iops(
+        self,
+        mock_qos,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_h2b,
+        mock_h2r,
+        mock_cr,
+    ):
+        """iops_qos alone on a multi-volume create still sends the IOPs limit"""
+        mock_h2b.side_effect = self._h2b
+        mock_h2r.side_effect = self._h2r
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "vol",
+            "size": "1G",
+            "count": 2,
+            "start": 0,
+            "digits": 2,
+            "suffix": "",
+            "bw_qos": "0",
+            "iops_qos": "50K",
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": None,
+            "priority_value": None,
+            "with_default_protection": True,
+            "context": "",
+        }
+        mock_items = []
+        for i in range(2):
+            mock_item = Mock()
+            mock_item.name = f"vol0{i}"
+            mock_item.provisioned = 1073741824
+            mock_item.serial = f"SERIAL000{i}"
+            mock_item.created = 1700000000000
+            mock_items.append(mock_item)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        mock_array_item = Mock()
+        mock_array_item.name = "array1"
+        mock_array.get_arrays.return_value = Mock(items=[mock_array_item])
+        mock_array.post_volumes.return_value = Mock(status_code=200, items=mock_items)
+
+        create_multi_volume(mock_module, mock_array)
+
+        mock_qos.assert_called_once_with(iops_limit=50000)
+        assert mock_volume_post.call_args[1] == {
+            "provisioned": 1073741824,
+            "qos": mock_qos.return_value,
+            "subtype": "regular",
+        }
+
+
+class TestQosClearToken:
+    """Only the documented tokens clear a QoS limit; a typo that parses to
+    0 must not"""
+
+    def test_clear_tokens(self):
+        for value in ("0", " 0 ", "0M", "0k", "0G", "0KB", "00", ""):
+            assert _qos_clear_requested(value) is True, value
+
+    def test_values_and_typos_are_not_clears(self):
+        for value in ("10X", "abc", "1G", "100", "50M", "0.5G", "O"):
+            assert _qos_clear_requested(value) is False, value
+
+
+class TestCreateMultiVolumeQosZeroFacts:
+    """A create with bw_qos 0 leaves the limit unset; the facts must not
+    read the absent attribute (the SDK raises AttributeError on it)"""
+
+    @patch("plugins.modules.purefa_volume.check_response")
+    @patch("plugins.modules.purefa_volume.human_to_bytes")
+    @patch("plugins.modules.purefa_volume.human_to_real", return_value=5000)
+    @patch("plugins.modules.purefa_volume.check_vgroup")
+    @patch("plugins.modules.purefa_volume.check_pod")
+    @patch("plugins.modules.purefa_volume.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_volume.VolumePost")
+    @patch("plugins.modules.purefa_volume.Qos")
+    def test_facts_report_zero_for_the_unset_limit(
+        self,
+        mock_qos,
+        mock_volume_post,
+        mock_lv,
+        mock_check_pod,
+        mock_check_vgroup,
+        mock_human_to_real,
+        mock_human_to_bytes,
+        mock_check_response,
+    ):
+        mock_human_to_bytes.side_effect = lambda v: 0 if str(v) == "0" else 1073741824
+        mock_check_vgroup.return_value = True
+        mock_check_pod.return_value = True
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.params = {
+            "name": "vol",
+            "size": "1G",
+            "count": None,
+            "start": 0,
+            "digits": 2,
+            "suffix": "",
+            "bw_qos": "0",
+            "iops_qos": "5000",
+            "pgroup": None,
+            "add_to_pgs": None,
+            "promotion_state": None,
+            "priority_operator": None,
+            "priority_value": None,
+            "with_default_protection": True,
+            "context": "",
+        }
+        item = Mock()
+        item.name = "vol"
+        item.provisioned = 1073741824
+        item.serial = "SERIAL0001"
+        item.created = 1700000000000
+        item.qos = Mock(spec=["iops_limit"])
+        item.qos.iops_limit = 5000
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.59"
+        mock_array_item = Mock()
+        mock_array_item.name = "array1"
+        mock_array.get_arrays.return_value = Mock(items=[mock_array_item])
+        mock_array.post_volumes.return_value = Mock(status_code=200, items=[item])
+
+        create_multi_volume(mock_module, mock_array, True)
+
+        volfact = mock_module.exit_json.call_args[1]["volume"]
+        assert volfact["vol"]["bandwidth_limit"] == 0
+        assert volfact["vol"]["iops_limit"] == 5000
+        # only the IOPs limit was requested from the array
+        assert mock_qos.call_args[1] == {"iops_limit": 5000}

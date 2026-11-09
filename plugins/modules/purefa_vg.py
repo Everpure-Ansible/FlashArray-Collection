@@ -49,14 +49,16 @@ options:
     - Bandwidth limit for vgroup in M or G units.
       M will set MB/s
       G will set GB/s
-      To clear an existing QoS setting use 0 (zero)
+    - To clear an existing QoS setting use 0 (zero). This removes the
+      bandwidth limit entirely; an unlimited volume group reports no limit.
     type: str
   iops_qos:
     description:
     - IOPs limit for vgroup - use value or K or M
       K will mean 1000
       M will mean 1000000
-      To clear an existing IOPs setting use 0 (zero)
+    - To clear an existing IOPs setting use 0 (zero). This removes the
+      IOPs limit entirely; an unlimited volume group reports no limit.
     type: str
   count:
     description:
@@ -212,6 +214,14 @@ try:
 except ImportError:
     HAS_PURESTORAGE = False
 
+try:
+    # Only this model accepts the empty string that clears a QoS limit
+    from pypureclient.flasharray import QosPatch
+except ImportError:
+    QosPatch = None
+
+import re
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.everpure.flasharray.plugins.module_utils.purefa import (
     get_array,
@@ -244,6 +254,36 @@ MIN_BWS = 1048576
 MIN_IOPS = 100
 MAX_BWS = 549755813888
 MAX_IOPS = 100000000
+
+
+def _qos_clear_requested(value):
+    """True when a QoS option asks for the limit to be removed.
+
+    The documented token is 0, with or without a unit (``0``, ``0M``,
+    ``0K``); an empty string clears as well, as in purefa_realm. Anything
+    else that merely parses to 0, such as the typo ``10X``, is not a clear:
+    human_to_bytes and human_to_real return 0 for a malformed value, so the
+    callers report those as out of range instead of silently removing a
+    limit.
+    """
+    text = str(value).strip().upper()
+    return text == "" or re.fullmatch(r"0+[KMGTP]?B?", text) is not None
+
+
+def _qos_patch(module, **limits):
+    """The SDK object that carries the given QoS limits for a PATCH.
+
+    The REST API clears a limit with an empty string, which only the
+    QosPatch model (py-pure-client 1.86.0 and later) accepts. A numeric
+    limit goes through the plain Qos model, as before.
+    """
+    if "" in limits.values():
+        if QosPatch is None:
+            module.fail_json(
+                msg="Clearing a QoS limit requires py-pure-client 1.86.0 or later"
+            )
+        return QosPatch(**limits)
+    return Qos(**limits)
 
 
 def _priority_adjustment(obj):
@@ -401,7 +441,7 @@ def make_vgroup(module, array):
     api_version = array.get_rest_version()
     changed = True
     if module.params["bw_qos"] and not module.params["iops_qos"]:
-        if int(human_to_bytes(module.params["bw_qos"])) in range(MIN_BWS, MAX_BWS):
+        if int(human_to_bytes(module.params["bw_qos"])) in range(MIN_BWS, MAX_BWS + 1):
             changed = True
             if not module.check_mode:
                 res = post_with_context(
@@ -424,7 +464,9 @@ def make_vgroup(module, array):
                 )
             )
     elif module.params["iops_qos"] and not module.params["bw_qos"]:
-        if int(human_to_real(module.params["iops_qos"])) in range(MIN_IOPS, MAX_IOPS):
+        if int(human_to_real(module.params["iops_qos"])) in range(
+            MIN_IOPS, MAX_IOPS + 1
+        ):
             changed = True
             if not module.check_mode:
                 res = post_with_context(
@@ -447,8 +489,8 @@ def make_vgroup(module, array):
     elif module.params["iops_qos"] and module.params["bw_qos"]:
         bw_qos_size = int(human_to_bytes(module.params["bw_qos"]))
         if int(human_to_real(module.params["iops_qos"])) in range(
-            MIN_IOPS, MAX_IOPS
-        ) and bw_qos_size in range(MIN_BWS, MAX_BWS):
+            MIN_IOPS, MAX_IOPS + 1
+        ) and bw_qos_size in range(MIN_BWS, MAX_BWS + 1):
             changed = True
             if not module.check_mode:
                 res = post_with_context(
@@ -526,13 +568,13 @@ def make_multi_vgroups(module, array):
         )
     if module.params["bw_qos"]:
         bw_qos = int(human_to_bytes(module.params["bw_qos"]))
-        if bw_qos in range(MIN_BWS, MAX_BWS):
+        if bw_qos in range(MIN_BWS, MAX_BWS + 1):
             bw_qos_size = bw_qos
         else:
             module.fail_json(msg="Bandwidth QoS value out of range.")
     if module.params["iops_qos"]:
         iops_qos = int(human_to_real(module.params["iops_qos"]))
-        if iops_qos in range(MIN_IOPS, MAX_IOPS):
+        if iops_qos in range(MIN_IOPS, MAX_IOPS + 1):
             iops_qos_size = iops_qos
         else:
             module.fail_json(msg="IOPs QoS value out of range.")
@@ -645,25 +687,46 @@ def update_vgroup(module, array):
                 )
 
     # ---------- QoS ----------
-    vg_qos = vg_all.qos
-    bw_limit = getattr(vg_qos, "bandwidth_limit", MAX_BWS)
-    iops_limit = getattr(vg_qos, "iops_limit", MAX_IOPS)
+    # An unlimited volume group has no bandwidth_limit / iops_limit at all
+    # (the SDK leaves the attribute unset), so None is "no limit". The
+    # maximum value is an explicit limit like any other.
+    vg_qos = getattr(vg_all, "qos", None)
+    current_bw = getattr(vg_qos, "bandwidth_limit", None)
+    current_iops = getattr(vg_qos, "iops_limit", None)
 
     if module.params.get("bw_qos") is not None:
-        bw_input = module.params["bw_qos"]
-        # If user wants to "disable" QoS, set to MAX_BWS
-        if bw_input == "0":
-            bw_val = MAX_BWS
-        else:
-            bw_val = int(human_to_bytes(bw_input))
-
-        # Only patch if different
-        if bw_val != getattr(vg_qos, "bandwidth_limit", MAX_BWS):
+        bw_clear = _qos_clear_requested(module.params["bw_qos"])
+        bw_val = 0 if bw_clear else int(human_to_bytes(module.params["bw_qos"]))
+        if bw_val == 0 and not bw_clear:
+            module.fail_json(
+                msg="Bandwidth QoS value {0} out of range.".format(
+                    module.params["bw_qos"]
+                )
+            )
+        if bw_clear:
+            # A requested 0 clears the limit; nothing to do when unlimited
+            if current_bw is not None:
+                changed = True
+                if not module.check_mode:
+                    res = array.patch_volume_groups(
+                        **kwargs,
+                        volume_group=VolumeGroupPatch(
+                            qos=_qos_patch(module, bandwidth_limit="")
+                        ),
+                    )
+                    check_response(
+                        res,
+                        module,
+                        f"Vgroup {module.params['name']} Bandwidth QoS removal",
+                    )
+        elif bw_val != current_bw:
             changed = True
             if not module.check_mode:
                 res = array.patch_volume_groups(
                     **kwargs,
-                    volume_group=VolumeGroupPatch(qos=Qos(bandwidth_limit=bw_val)),
+                    volume_group=VolumeGroupPatch(
+                        qos=_qos_patch(module, bandwidth_limit=bw_val)
+                    ),
                 )
                 check_response(
                     res,
@@ -672,18 +735,36 @@ def update_vgroup(module, array):
                 )
 
     if module.params.get("iops_qos") is not None:
-        iops_input = module.params["iops_qos"]
-        if iops_input == "0":
-            iops_val = MAX_IOPS  # unlimited
-        else:
-            iops_val = int(human_to_real(iops_input))
-
-        if iops_val != getattr(vg_qos, "iops_limit", MAX_IOPS):
+        iops_clear = _qos_clear_requested(module.params["iops_qos"])
+        iops_val = 0 if iops_clear else int(human_to_real(module.params["iops_qos"]))
+        if iops_val == 0 and not iops_clear:
+            module.fail_json(
+                msg="IOPs QoS value {0} out of range.".format(module.params["iops_qos"])
+            )
+        if iops_clear:
+            # A requested 0 clears the limit; nothing to do when unlimited
+            if current_iops is not None:
+                changed = True
+                if not module.check_mode:
+                    res = array.patch_volume_groups(
+                        **kwargs,
+                        volume_group=VolumeGroupPatch(
+                            qos=_qos_patch(module, iops_limit="")
+                        ),
+                    )
+                    check_response(
+                        res,
+                        module,
+                        f"Vgroup {module.params['name']} IOPS QoS removal",
+                    )
+        elif iops_val != current_iops:
             changed = True
             if not module.check_mode:
                 res = array.patch_volume_groups(
                     **kwargs,
-                    volume_group=VolumeGroupPatch(qos=Qos(iops_limit=iops_val)),
+                    volume_group=VolumeGroupPatch(
+                        qos=_qos_patch(module, iops_limit=iops_val)
+                    ),
                 )
                 check_response(
                     res,
