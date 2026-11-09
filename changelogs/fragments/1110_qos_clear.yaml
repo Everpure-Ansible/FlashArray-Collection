@@ -1,0 +1,6 @@
+bugfixes:
+  - "purefa_volume - ``bw_qos`` or ``iops_qos`` ``0`` now clears the limit instead of setting it to the array maximum, which the array treats as an explicit limit. Requires py-pure-client 1.86.0 or later to clear."
+  - "purefa_volume - creating a volume with ``bw_qos`` or ``iops_qos`` ``0`` no longer fails; the limit is left unset."
+  - "purefa_volume - the documented maximum values ``512G`` and ``100M`` are accepted."
+  - "purefa_vg - ``bw_qos`` or ``iops_qos`` ``0`` now clears the limit instead of setting it to the array maximum, and ``\"\"`` or ``0M`` no longer crash the module."
+  - "purefa_vg - the documented maximum values ``512G`` and ``100M`` are accepted."
