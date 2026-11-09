@@ -1,0 +1,4 @@
+minor_changes:
+  - "purefa_pod - add ``eradicate_undo`` to eradicate a pod's undo-demote pods before demoting it again; without it the demotion is still refused and the message names the pods."
+bugfixes:
+  - "purefa_pod - promoting with ``undo`` picks the newest undo-demote pod by number, not by name order."

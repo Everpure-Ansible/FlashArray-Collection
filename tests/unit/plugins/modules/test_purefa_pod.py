@@ -44,6 +44,7 @@ sys.modules[
 ] = MagicMock()
 
 from plugins.modules.purefa_pod import (
+    _undo_pod_sequence,
     get_pod,
     get_undo_pod,
     get_target,
@@ -2171,9 +2172,9 @@ class TestPromoteDemotePod:
             pass
 
         mock_module.fail_json.assert_called_once()
-        assert "undo-demote pod not being eradicated" in str(
-            mock_module.fail_json.call_args
-        )
+        msg = mock_module.fail_json.call_args[1]["msg"]
+        assert "test-pod.undo-demote.1" in msg
+        assert "eradicate_undo" in msg
 
     @patch("plugins.modules.purefa_pod.patch_with_context")
     @patch("plugins.modules.purefa_pod.get_undo_pod")
@@ -3165,3 +3166,202 @@ class TestFailoverIdempotency:
 
         mock_patch_with_context.assert_not_called()
         mock_module.exit_json.assert_called_once_with(changed=False)
+
+
+class TestDemoteEradicateUndo:
+    """Demoting a pod that still has undo-demote pods (eradicate_undo)"""
+
+    @staticmethod
+    def _module(eradicate_undo=None, check_mode=False):
+        mock_module = Mock()
+        mock_module.check_mode = check_mode
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        mock_module.params = {
+            "name": "test-pod",
+            "context": "",
+            "failover": None,
+            "mediator": "purestorage",
+            "promote": False,
+            "undo": None,
+            "quiesce": None,
+            "quota": None,
+            "default_protection_pg": None,
+        }
+        if eradicate_undo is not None:
+            mock_module.params["eradicate_undo"] = eradicate_undo
+        return mock_module
+
+    @staticmethod
+    def _array():
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.38"
+        return mock_array
+
+    @staticmethod
+    def _config():
+        mock_config = Mock()
+        mock_config.failover_preferences = []
+        mock_config.mediator = "purestorage"
+        mock_config.array_count = 1
+        mock_config.promotion_status = "promoted"
+        mock_config.__getitem__ = lambda self, key: (
+            0 if key == "link_target_count" else None
+        )
+        return mock_config
+
+    @staticmethod
+    def _undo(*numbers):
+        pods = []
+        for number in numbers:
+            pod = Mock()
+            pod.name = f"test-pod.undo-demote.{number}"
+            pods.append(pod)
+        return pods
+
+    @patch("plugins.modules.purefa_pod.delete_with_context")
+    @patch("plugins.modules.purefa_pod.get_undo_pod")
+    @patch("plugins.modules.purefa_pod.patch_with_context")
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    @patch("plugins.modules.purefa_pod.LooseVersion", side_effect=LooseVersion)
+    def test_refused_without_the_option_and_names_the_pods(
+        self, mock_lv, mock_get, mock_patch, mock_get_undo_pod, mock_delete
+    ):
+        import pytest
+
+        mock_module = self._module()
+        mock_get.return_value = Mock(status_code=200, items=[self._config()])
+        mock_get_undo_pod.return_value = self._undo(6)
+
+        with pytest.raises(SystemExit):
+            update_pod(mock_module, self._array())
+
+        msg = mock_module.fail_json.call_args[1]["msg"]
+        assert "test-pod.undo-demote.6" in msg
+        assert "eradicate_undo" in msg
+        mock_delete.assert_not_called()
+        mock_patch.assert_not_called()
+
+    @patch("plugins.modules.purefa_pod.check_response")
+    @patch("plugins.modules.purefa_pod.delete_with_context")
+    @patch("plugins.modules.purefa_pod.get_undo_pod")
+    @patch("plugins.modules.purefa_pod.patch_with_context")
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    @patch("plugins.modules.purefa_pod.LooseVersion", side_effect=LooseVersion)
+    def test_eradicates_every_undo_pod_then_demotes(
+        self, mock_lv, mock_get, mock_patch, mock_get_undo_pod, mock_delete, mock_cr
+    ):
+        mock_module = self._module(eradicate_undo=True)
+        mock_array = self._array()
+        mock_get.return_value = Mock(status_code=200, items=[self._config()])
+        mock_get_undo_pod.return_value = self._undo(9, 10)
+        mock_delete.return_value = Mock(status_code=200)
+        mock_patch.return_value = Mock(status_code=200)
+
+        update_pod(mock_module, mock_array)
+
+        assert [c[1]["names"] for c in mock_delete.call_args_list] == [
+            ["test-pod.undo-demote.9"],
+            ["test-pod.undo-demote.10"],
+        ]
+        assert all(
+            c[1]["eradicate_contents"] is True for c in mock_delete.call_args_list
+        )
+        assert all(c[0][1] == "delete_pods" for c in mock_delete.call_args_list)
+        mock_patch.assert_called_once()
+        assert mock_patch.call_args[0][1] == "patch_pods"
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_pod.check_response")
+    @patch("plugins.modules.purefa_pod.delete_with_context")
+    @patch("plugins.modules.purefa_pod.get_undo_pod")
+    @patch("plugins.modules.purefa_pod.patch_with_context")
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    @patch("plugins.modules.purefa_pod.LooseVersion", side_effect=LooseVersion)
+    def test_check_mode_reports_but_touches_nothing(
+        self, mock_lv, mock_get, mock_patch, mock_get_undo_pod, mock_delete, mock_cr
+    ):
+        mock_module = self._module(eradicate_undo=True, check_mode=True)
+        mock_get.return_value = Mock(status_code=200, items=[self._config()])
+        mock_get_undo_pod.return_value = self._undo(6)
+
+        update_pod(mock_module, self._array())
+
+        mock_delete.assert_not_called()
+        mock_patch.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_pod.check_response")
+    @patch("plugins.modules.purefa_pod.delete_with_context")
+    @patch("plugins.modules.purefa_pod.get_undo_pod")
+    @patch("plugins.modules.purefa_pod.patch_with_context")
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    @patch("plugins.modules.purefa_pod.LooseVersion", side_effect=LooseVersion)
+    def test_option_without_undo_pods_is_a_plain_demote(
+        self, mock_lv, mock_get, mock_patch, mock_get_undo_pod, mock_delete, mock_cr
+    ):
+        mock_module = self._module(eradicate_undo=True)
+        mock_get.return_value = Mock(status_code=200, items=[self._config()])
+        mock_get_undo_pod.return_value = None
+        mock_patch.return_value = Mock(status_code=200)
+
+        update_pod(mock_module, self._array())
+
+        mock_delete.assert_not_called()
+        mock_patch.assert_called_once()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_pod.check_response")
+    @patch("plugins.modules.purefa_pod.delete_with_context")
+    @patch("plugins.modules.purefa_pod.get_undo_pod")
+    @patch("plugins.modules.purefa_pod.patch_with_context")
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    @patch("plugins.modules.purefa_pod.LooseVersion", side_effect=LooseVersion)
+    def test_failed_eradication_stops_before_the_demote(
+        self, mock_lv, mock_get, mock_patch, mock_get_undo_pod, mock_delete, mock_cr
+    ):
+        import pytest
+
+        mock_module = self._module(eradicate_undo=True)
+        mock_get.return_value = Mock(status_code=200, items=[self._config()])
+        mock_get_undo_pod.return_value = self._undo(6)
+        mock_delete.return_value = Mock(status_code=400)
+        mock_cr.side_effect = SystemExit("check_response failed")
+
+        with pytest.raises(SystemExit):
+            update_pod(mock_module, self._array())
+
+        mock_delete.assert_called_once()
+        mock_patch.assert_not_called()
+        mock_module.exit_json.assert_not_called()
+
+
+class TestUndoPodOrder:
+    """Undo-demote pods sort by their number, so the newest is last"""
+
+    def test_sequence_key(self):
+        pod = Mock()
+        pod.name = "test-pod.undo-demote.10"
+        assert _undo_pod_sequence(pod) == 10
+        pod.name = "test-pod.undo-demote.9"
+        assert _undo_pod_sequence(pod) == 9
+        pod.name = "test-pod.undo-demote"
+        assert _undo_pod_sequence(pod) == -1
+
+    @patch("plugins.modules.purefa_pod.get_with_context")
+    def test_get_undo_pod_orders_numerically(self, mock_get_with_context):
+        mock_module = Mock()
+        mock_module.params = {"name": "test-pod", "context": ""}
+        pods = []
+        for number in (10, 9, 100):
+            pod = Mock()
+            pod.name = f"test-pod.undo-demote.{number}"
+            pods.append(pod)
+        mock_get_with_context.return_value = Mock(status_code=200, items=pods)
+
+        result = get_undo_pod(mock_module, Mock())
+
+        assert [pod.name for pod in result] == [
+            "test-pod.undo-demote.9",
+            "test-pod.undo-demote.10",
+            "test-pod.undo-demote.100",
+        ]

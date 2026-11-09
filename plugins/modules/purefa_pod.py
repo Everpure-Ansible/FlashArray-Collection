@@ -80,7 +80,7 @@ options:
     default: purestorage
   promote:
     description:
-      - Promote/demote any pod not in a stretched relationship. .
+      - Promote/demote any pod not in a stretched relationship.
       - Demoting a pod will render it read-only.
     required: false
     type: bool
@@ -88,17 +88,27 @@ options:
     description:
       - Quiesce/Skip quiesce when I(promote) is false and demoting an ActiveDR pod.
       - Quiesce will ensure all local data has been replicated before demotion.
-      - Skipping quiesce looses all pending data to be replicated to the remote pod.
-      - Can only demote the pod if it is in a Acrive DR replica link relationship.
+      - Skipping quiesce loses all pending data to be replicated to the remote pod.
+      - Can only demote the pod if it is in an ActiveDR replica link relationship.
       - This will default to True
     required: false
     type: bool
   undo:
     description:
-      - Use the I(undo-remote) pod when I(promote) is true and promoting an ActiveDR pod.
+      - Use the undo-demote pod when I(promote) is true and promoting an ActiveDR pod.
       - This will default to True
     required: false
     type: bool
+  eradicate_undo:
+    description:
+      - When I(promote) is false and the pod still has undo-demote pods from
+        an earlier demotion, eradicate them before demoting.
+      - Without this the demotion is refused while such pods exist. The array
+        keeps one undo-demote pod per demotion, so eradicating the old ones
+        leaves only the one a later promotion with I(undo) should use.
+    type: bool
+    default: false
+    version_added: '1.47.0'
   quota:
     description:
       - Logical quota limit of the pod in K, M, G, T or P units, or bytes.
@@ -237,6 +247,14 @@ EXAMPLES = r"""
     fa_url: 10.10.10.2
     api_token: e31060a7-21fc-e277-6240-25983c6c4592
     state: present
+
+- name: Demote pod foo, eradicating the undo-demote pods of an earlier demotion first
+  everpure.flasharray.purefa_pod:
+    name: foo
+    promote: false
+    eradicate_undo: true
+    fa_url: 10.10.10.2
+    api_token: e31060a7-21fc-e277-6240-25983c6c4592
 """
 
 RETURN = r"""
@@ -331,8 +349,18 @@ def get_pod(module, array):
     return res.status_code == 200
 
 
+def _undo_pod_sequence(pod):
+    """Sort key for undo-demote pods: the number in <pod>.undo-demote.<n>.
+
+    The array numbers them in creation order, so the newest has the highest
+    number; a plain name sort would put ``.10`` before ``.9``.
+    """
+    suffix = pod.name.rsplit(".", 1)[-1]
+    return int(suffix) if suffix.isdecimal() else -1
+
+
 def get_undo_pod(module, array):
-    """Return list of Undo Pods or None if none exist"""
+    """Return the undo-demote pods of the pod, oldest first, or None"""
     res = get_with_context(
         array,
         "get_pods",
@@ -341,7 +369,7 @@ def get_undo_pod(module, array):
         names=[module.params["name"] + ".undo-demote.*"],
     )
     if res.status_code == 200:
-        pods = list(res.items)
+        pods = sorted(res.items, key=_undo_pod_sequence)
         return pods if pods else None
     return None
 
@@ -823,13 +851,34 @@ def update_pod(module, array):
                 current_config.promotion_status != "demoted"
                 and not module.params["promote"]
             ):
-                # Demote a promoted pod
-                if get_undo_pod(module, array):
+                # Demote a promoted pod. The array allows it while the
+                # undo-demote pods of an earlier demotion still exist and
+                # simply adds another; the module refuses unless asked to
+                # eradicate the old ones first.
+                undo_pods = get_undo_pod(module, array) or []
+                if undo_pods and not module.params.get("eradicate_undo"):
+                    names = ", ".join(pod.name for pod in undo_pods)
                     module.fail_json(
-                        msg=f"Cannot demote pod {module.params['name']} due to associated undo-demote pod not being eradicated"
+                        msg=f"Cannot demote pod {module.params['name']}: undo-demote "
+                        f"pod(s) {names} exist. Eradicate them first or set "
+                        "eradicate_undo to true"
                     )
                 changed = True
                 if not module.check_mode:
+                    for undo_pod in undo_pods:
+                        res = delete_with_context(
+                            array,
+                            "delete_pods",
+                            CONTEXT_VERSION,
+                            module,
+                            names=[undo_pod.name],
+                            eradicate_contents=True,
+                        )
+                        check_response(
+                            res,
+                            module,
+                            f"Eradication of undo-demote pod {undo_pod.name}",
+                        )
                     if module.params["quiesce"] is None:
                         module.params["quiesce"] = True
                     if current_config["link_target_count"] == 0:
@@ -1139,6 +1188,7 @@ def main():
             failover=dict(type="list", elements="str"),
             promote=dict(type="bool"),
             undo=dict(type="bool"),
+            eradicate_undo=dict(type="bool", default=False),
             quiesce=dict(type="bool"),
             eradicate=dict(type="bool", default=False),
             state=dict(type="str", default="present", choices=["absent", "present"]),
