@@ -59,6 +59,8 @@ from plugins.modules.purefa_vg import (
     _priority_bands,
     _stored_priority,
     _validate_priority,
+    _qos_clear_requested,
+    _qos_patch,
 )
 import plugins.modules.purefa_vg as _vg_module
 
@@ -616,7 +618,7 @@ class TestUpdateVgroupSuccess:
         mock_vg.priority_adjustment.priority_adjustment_operator = "+"
         mock_vg.priority_adjustment.priority_adjustment_value = 0
         mock_vg.qos = Mock()
-        mock_vg.qos.bandwidth_limit = 549755813888  # Default
+        mock_vg.qos.bandwidth_limit = 549755813888  # Explicit limit at the maximum
         mock_array.get_volume_groups.return_value = Mock(items=[mock_vg])
         mock_array.patch_volume_groups.return_value = Mock(status_code=200)
 
@@ -677,7 +679,7 @@ class TestUpdateVgroupSuccess:
         mock_vg.priority_adjustment.priority_adjustment_operator = "+"
         mock_vg.priority_adjustment.priority_adjustment_value = 0
         mock_vg.qos = Mock()
-        mock_vg.qos.iops_limit = 100000000  # Default MAX
+        mock_vg.qos.iops_limit = 100000000  # Explicit limit at the maximum
         mock_array.get_volume_groups.return_value = Mock(items=[mock_vg])
         mock_array.patch_volume_groups.return_value = Mock(status_code=200)
 
@@ -687,12 +689,13 @@ class TestUpdateVgroupSuccess:
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.QosPatch")
     @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
-    @patch("plugins.modules.purefa_vg.human_to_real")
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=0)
     def test_update_vgroup_iops_qos_disable(
-        self, mock_human_to_real, mock_lv, mock_check_response
+        self, mock_human_to_real, mock_lv, mock_qos_patch, mock_check_response
     ):
-        """Test update_vgroup disabling IOPS QoS with 0"""
+        """Test update_vgroup disabling IOPS QoS with 0 clears the limit"""
         mock_module = Mock()
         mock_module.check_mode = False
         mock_module.params = {
@@ -716,16 +719,18 @@ class TestUpdateVgroupSuccess:
 
         update_vgroup(mock_module, mock_array)
 
-        mock_array.patch_volume_groups.assert_called()
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos_patch.assert_called_once_with(iops_limit="")
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.QosPatch")
     @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
-    @patch("plugins.modules.purefa_vg.human_to_bytes")
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
     def test_update_vgroup_bw_qos_disable(
-        self, mock_human_to_bytes, mock_lv, mock_check_response
+        self, mock_human_to_bytes, mock_lv, mock_qos_patch, mock_check_response
     ):
-        """Test update_vgroup disabling bandwidth QoS with 0"""
+        """Test update_vgroup disabling bandwidth QoS with 0 clears the limit"""
         mock_module = Mock()
         mock_module.check_mode = False
         mock_module.params = {
@@ -749,7 +754,8 @@ class TestUpdateVgroupSuccess:
 
         update_vgroup(mock_module, mock_array)
 
-        mock_array.patch_volume_groups.assert_called()
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
         mock_module.exit_json.assert_called_once_with(changed=True)
 
     @patch("plugins.modules.purefa_vg.check_response")
@@ -1708,3 +1714,303 @@ class TestValidatePriority:
         _validate_priority(module, array)
         module.fail_json.assert_not_called()
         array.get_arrays.assert_not_called()
+
+
+class TestUpdateVgroupQosClear:
+    """A requested 0 clears a QoS limit with the empty string the REST API
+    accepts (QosPatch model); an unlimited volume group has no limit
+    attribute at all, and the maximum value is an explicit limit."""
+
+    @staticmethod
+    def _module(bw_qos=None, iops_qos=None, check_mode=False):
+        mock_module = Mock()
+        mock_module.check_mode = check_mode
+        mock_module.params = {
+            "name": "test-vg",
+            "context": "",
+            "bw_qos": bw_qos,
+            "iops_qos": iops_qos,
+            "priority_operator": None,
+            "priority_value": None,
+        }
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        return mock_module
+
+    @staticmethod
+    def _array(qos):
+        mock_vg = Mock()
+        mock_vg.priority_adjustment = Mock(
+            priority_adjustment_operator="+", priority_adjustment_value=0
+        )
+        mock_vg.qos = qos
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.54"
+        mock_array.get_volume_groups.return_value = Mock(
+            status_code=200, items=[mock_vg]
+        )
+        mock_array.patch_volume_groups.return_value = Mock(status_code=200)
+        return mock_array
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    def test_qos_patch_helper_picks_the_model(self, mock_qos_patch, mock_qos):
+        """An empty string goes through QosPatch, a number through Qos"""
+        module = Mock()
+        _qos_patch(module, bandwidth_limit="")
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
+        mock_qos.assert_not_called()
+        mock_qos_patch.reset_mock()
+        _qos_patch(module, iops_limit=5000)
+        mock_qos.assert_called_once_with(iops_limit=5000)
+        mock_qos_patch.assert_not_called()
+        module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_vg.QosPatch", None)
+    def test_qos_patch_helper_without_model_fails_on_clear(self):
+        """Without QosPatch a clear fails naming the SDK requirement, while a
+        numeric limit still works"""
+        module = Mock()
+        module.fail_json.side_effect = SystemExit("fail_json called")
+        try:
+            _qos_patch(module, bandwidth_limit="")
+        except SystemExit:
+            pass
+        module.fail_json.assert_called_once()
+        assert "py-pure-client" in module.fail_json.call_args[1]["msg"]
+        module.fail_json.reset_mock()
+        _qos_patch(module, bandwidth_limit=1048576)
+        module.fail_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_bw_zero_against_explicit_limit_clears(
+        self, mock_h2b, mock_lv, mock_qos_patch, mock_qos, mock_check_response
+    ):
+        mock_module = self._module(bw_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=1073741824, iops_limit=None))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_bw_zero_against_maximum_clears(
+        self, mock_h2b, mock_lv, mock_qos_patch, mock_qos, mock_check_response
+    ):
+        """The maximum is a stored limit, not the unlimited state"""
+        mock_module = self._module(bw_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=549755813888, iops_limit=None))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos_patch.assert_called_once_with(bandwidth_limit="")
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=0)
+    def test_iops_zero_against_maximum_clears(
+        self, mock_h2r, mock_lv, mock_qos_patch, mock_qos, mock_check_response
+    ):
+        mock_module = self._module(iops_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=None, iops_limit=100000000))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos_patch.assert_called_once_with(iops_limit="")
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_zero_against_no_limit_attribute_is_noop(
+        self, mock_h2b, mock_h2r, mock_lv, mock_qos_patch, mock_qos
+    ):
+        """The SDK leaves an unset limit absent: reading it raises"""
+        mock_module = self._module(bw_qos="0", iops_qos="0")
+        mock_array = self._array(Mock(spec=[]))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_zero_against_null_limit_is_noop(
+        self, mock_h2b, mock_h2r, mock_lv, mock_qos_patch, mock_qos
+    ):
+        mock_module = self._module(bw_qos="0", iops_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=None, iops_limit=None))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=1073741824)
+    def test_numeric_change_from_unlimited_uses_qos(
+        self, mock_h2b, mock_lv, mock_qos_patch, mock_qos, mock_check_response
+    ):
+        """A number is a limit: sent through Qos, and None counts as different"""
+        mock_module = self._module(bw_qos="1G")
+        mock_array = self._array(Mock(spec=[]))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_called_once()
+        mock_qos.assert_called_once_with(bandwidth_limit=1073741824)
+        mock_qos_patch.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=50000)
+    def test_numeric_same_as_current_is_noop(
+        self, mock_h2r, mock_lv, mock_qos_patch, mock_qos
+    ):
+        mock_module = self._module(iops_qos="50K")
+        mock_array = self._array(Mock(bandwidth_limit=None, iops_limit=50000))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=False)
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_pending_clear_in_check_mode(
+        self, mock_h2b, mock_lv, mock_qos_patch, mock_qos
+    ):
+        mock_module = self._module(bw_qos="0", check_mode=True)
+        mock_array = self._array(Mock(bandwidth_limit=104857600, iops_limit=None))
+
+        update_vgroup(mock_module, mock_array)
+
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_qos_patch.assert_not_called()
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch", None)
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    def test_clear_without_qos_patch_model_fails(self, mock_h2b, mock_lv, mock_qos):
+        """An SDK without QosPatch cannot clear: fail naming py-pure-client"""
+        mock_module = self._module(bw_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=104857600, iops_limit=None))
+
+        try:
+            update_vgroup(mock_module, mock_array)
+        except SystemExit:
+            pass
+
+        mock_module.fail_json.assert_called_once()
+        assert "py-pure-client" in mock_module.fail_json.call_args[1]["msg"]
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_qos.assert_not_called()
+        mock_module.exit_json.assert_not_called()
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.Qos")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    @patch("plugins.modules.purefa_vg.human_to_real", return_value=0)
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=52428800)
+    def test_set_one_limit_and_clear_the_other(
+        self, mock_h2b, mock_h2r, mock_lv, mock_qos_patch, mock_qos, mock_check
+    ):
+        """One PATCH per limit: Qos for the number, QosPatch for the clear"""
+        mock_module = self._module(bw_qos="50M", iops_qos="0")
+        mock_array = self._array(Mock(bandwidth_limit=None, iops_limit=5000))
+
+        update_vgroup(mock_module, mock_array)
+
+        assert mock_array.patch_volume_groups.call_count == 2
+        mock_qos.assert_called_once_with(bandwidth_limit=52428800)
+        mock_qos_patch.assert_called_once_with(iops_limit="")
+        mock_module.exit_json.assert_called_once_with(changed=True)
+
+
+class TestQosClearToken:
+    """Only the documented tokens clear a QoS limit; a typo that parses to
+    0 must not"""
+
+    def test_clear_tokens(self):
+        for value in ("0", " 0 ", "0M", "0k", "0G", "0KB", "00", ""):
+            assert _qos_clear_requested(value) is True, value
+
+    def test_values_and_typos_are_not_clears(self):
+        for value in ("10X", "abc", "1G", "100", "50M", "0.5G", "O"):
+            assert _qos_clear_requested(value) is False, value
+
+
+class TestUpdateVgroupQosTypo:
+    """A malformed QoS value parses to 0 but is not a clear"""
+
+    @patch("plugins.modules.purefa_vg.check_response")
+    @patch("plugins.modules.purefa_vg.QosPatch")
+    @patch("plugins.modules.purefa_vg.human_to_bytes", return_value=0)
+    @patch("plugins.modules.purefa_vg.LooseVersion", side_effect=LooseVersion)
+    def test_typo_fails_instead_of_clearing(
+        self, mock_lv, mock_h2b, mock_qos_patch, mock_check_response
+    ):
+        import pytest
+
+        mock_module = Mock()
+        mock_module.check_mode = False
+        mock_module.fail_json.side_effect = SystemExit("fail_json called")
+        mock_module.params = {
+            "name": "test-vg",
+            "context": "",
+            "bw_qos": "10X",
+            "iops_qos": None,
+            "priority_operator": None,
+            "priority_value": None,
+        }
+        mock_vg = Mock()
+        mock_vg.qos = Mock(bandwidth_limit=104857600, iops_limit=5000)
+        mock_array = Mock()
+        mock_array.get_rest_version.return_value = "2.54"
+        mock_array.get_volume_groups.return_value = Mock(
+            status_code=200, items=[mock_vg]
+        )
+
+        with pytest.raises(SystemExit):
+            update_vgroup(mock_module, mock_array)
+
+        assert "out of range" in mock_module.fail_json.call_args[1]["msg"]
+        mock_array.patch_volume_groups.assert_not_called()
+        mock_qos_patch.assert_not_called()
