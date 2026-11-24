@@ -60,7 +60,7 @@ jobs:
       run: |
         pwd
         mkdir -p ansible_collections/everpure/flasharray
-        rsync -av . ansible_collections/everpure/flasharray --exclude ansible_collection/everpure/flasharray
+        rsync -av . ansible_collections/everpure/flasharray --exclude /ansible_collections
         cd ansible_collections/everpure/flasharray
         ansible-test sanity -v --color --python ${{ matrix.python-version }} --docker
 
